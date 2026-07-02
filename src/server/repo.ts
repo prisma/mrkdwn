@@ -15,6 +15,7 @@ import type { DocStore, DocumentRecord, WorkspaceRecord } from "./store";
 import type { MrkdwnDoc } from "../shared/types";
 import { newPageId, uniqueSlug } from "../shared/slug";
 import { WELCOME_DOC } from "./welcome";
+import { createObjectMirror, mirrorKey, type ObjectMirror } from "./persist";
 
 const TITLE_SYNC_DEBOUNCE_MS = 400;
 
@@ -40,16 +41,21 @@ export interface DocHost {
   pagePath(entry: PageEntry): string;
 }
 
-export async function openDocHost(config: ServerConfig, store: DocStore): Promise<DocHost> {
+export async function openDocHost(
+  config: ServerConfig,
+  store: DocStore,
+  mirror: ObjectMirror | undefined = config.s3 ? createObjectMirror(config.s3) : undefined
+): Promise<DocHost> {
   const bridge = new BunWSServer();
   // The bridge implements exactly the surface the adapter uses; the adapter's
   // types want `ws.WebSocketServer`, hence the cast.
   const adapter = new WebSocketServerAdapter(bridge as never);
 
+  const storage = new NodeFSStorageAdapter(join(config.dataDir, "automerge"));
   const repo = new Repo({
     peerId: `mrkdwn-server-${config.port}` as PeerId,
     network: [adapter],
-    storage: new NodeFSStorageAdapter(join(config.dataDir, "automerge")),
+    storage,
     sharePolicy: async () => true,
   });
 
@@ -80,8 +86,44 @@ export async function openDocHost(config: ServerConfig, store: DocStore): Promis
     });
   };
 
-  const openEntry = async (record: DocumentRecord): Promise<PageEntry> => {
-    const handle = await repo.find<MrkdwnDoc>(record.automergeUrl as AutomergeUrl);
+  /** Compute disks are ephemeral per deployment: the registry may know pages
+   * the local Automerge storage has never seen. Before opening, seed missing
+   * docs from the S3 mirror (a full `A.save` file is a valid storage chunk),
+   * so `repo.find` resolves offline instead of hanging the boot. */
+  const restoreFromMirror = async (record: DocumentRecord): Promise<void> => {
+    if (!mirror) return;
+    const docId = record.automergeUrl.replace(/^automerge:/, "");
+    const local = await storage.loadRange([docId]);
+    if (local.length > 0) return; // present on disk — nothing to restore
+    const bytes = await mirror.read(mirrorKey(record.workspaceId, record.id));
+    if (!bytes) return; // never persisted (or mirror unreachable) — let the timeout decide
+    await storage.save([docId, "snapshot", "s3-restore"], bytes);
+    console.log(`[mrkdwn] restored ${record.id} ("${record.title}") from the S3 mirror`);
+  };
+
+  const openEntry = async (record: DocumentRecord): Promise<PageEntry | null> => {
+    await restoreFromMirror(record).catch(err => {
+      console.warn(`[mrkdwn] mirror restore failed for ${record.id}:`, err);
+    });
+    // find() blocks until the doc is ready — a doc in neither storage nor
+    // mirror would block forever, so race it against a timeout and skip the
+    // page instead of never booting (the registry row stays; a future mirror
+    // can revive it). Rejections (unavailable, bad url) also skip.
+    const handle = await Promise.race([
+      repo.find<MrkdwnDoc>(record.automergeUrl as AutomergeUrl),
+      new Promise<null>(r => setTimeout(() => r(null), 10_000)),
+    ]).catch((err: unknown) => {
+      console.warn(`[mrkdwn] page ${record.id} ("${record.title}") failed to load — skipping:`, err);
+      return null;
+    });
+    if (!handle) {
+      console.warn(`[mrkdwn] page ${record.id} ("${record.title}") has no local data and no mirror — skipping`);
+      // drop the never-ready handle, or repo.shutdown()'s flush trips on it
+      try {
+        repo.delete(record.automergeUrl as AutomergeUrl);
+      } catch {}
+      return null;
+    }
     await handle.whenReady();
     const entry: PageEntry = { record, handle };
     entries.set(record.id, entry);
@@ -112,18 +154,25 @@ export async function openDocHost(config: ServerConfig, store: DocStore): Promis
 
   if (config.state.docUrl && ![...entries.values()].some(e => e.record.automergeUrl === config.state.docUrl)) {
     const handle = await repo.find<MrkdwnDoc>(config.state.docUrl as AutomergeUrl);
-    await handle.whenReady();
-    const title = handle.doc()?.title ?? "Untitled";
-    const record = await store.createDocument({
-      id: newPageId(),
-      workspaceId: workspace.id,
-      title,
-      slug: uniqueSlug(title, takenSlugs()),
-      automergeUrl: handle.url,
-    });
-    const entry: PageEntry = { record, handle };
-    entries.set(record.id, entry);
-    watchTitle(entry);
+    const ready = await Promise.race([
+      handle.whenReady().then(() => true),
+      new Promise<false>(r => setTimeout(() => r(false), 10_000)),
+    ]);
+    if (!ready) {
+      console.warn(`[mrkdwn] legacy doc ${config.state.docUrl} is not in local storage — skipping migration`);
+    } else {
+      const title = handle.doc()?.title ?? "Untitled";
+      const record = await store.createDocument({
+        id: newPageId(),
+        workspaceId: workspace.id,
+        title,
+        slug: uniqueSlug(title, takenSlugs()),
+        automergeUrl: handle.url,
+      });
+      const entry: PageEntry = { record, handle };
+      entries.set(record.id, entry);
+      watchTitle(entry);
+    }
   }
 
   if (entries.size === 0) {

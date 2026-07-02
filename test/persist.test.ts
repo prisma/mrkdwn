@@ -2,11 +2,15 @@
  * naming, persistedAt bookkeeping, retries. Uses a fake object writer —
  * no real bucket is ever touched from tests. */
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import * as A from "@automerge/automerge";
 import { Repo } from "@automerge/automerge-repo";
-import { PersistWorker, sameHeads, type ObjectWriter } from "../src/server/persist";
+import { PersistWorker, mirrorKey, sameHeads, type ObjectMirror, type ObjectWriter } from "../src/server/persist";
 import { MemoryStore } from "../src/server/store";
-import type { PageEntry } from "../src/server/repo";
+import { openDocHost, type PageEntry } from "../src/server/repo";
+import { loadConfig } from "../src/server/config";
 import type { MrkdwnDoc } from "../src/shared/types";
 
 const INTERVAL = 40;
@@ -117,6 +121,80 @@ describe("PersistWorker", () => {
     expect(worker.pendingCount()).toBe(0);
     worker.dispose();
   });
+});
+
+describe("boot restore from the mirror", () => {
+  test("a fresh data dir revives registry pages from S3 bytes", async () => {
+    // world 1: a page exists, its automerge file is mirrored
+    const store = new MemoryStore();
+    const objects = new Map<string, Uint8Array>();
+    const mirror: ObjectMirror = {
+      async write(key, data) {
+        objects.set(key, data);
+      },
+      async read(key) {
+        return objects.get(key) ?? null;
+      },
+    };
+    const tmp1 = mkdtempSync(join(tmpdir(), "mrkdwn-restore-1-"));
+    const config1 = loadConfig({ port: 0, dataDir: tmp1 });
+    delete config1.s3;
+    const host1 = await openDocHost(config1, store, mirror);
+    host1.defaultPage.handle.change(d => A.splice(d, ["content"], 0, 0, "SURVIVES REDEPLOY\n"));
+    objects.set(
+      mirrorKey(host1.workspace.id, host1.defaultPage.record.id),
+      A.save(host1.defaultPage.handle.doc())
+    );
+    host1.bridge.shutdown();
+    await host1.repo.shutdown();
+
+    // world 2: same registry (Postgres survives), EMPTY data dir (Compute disk)
+    const tmp2 = mkdtempSync(join(tmpdir(), "mrkdwn-restore-2-"));
+    const config2 = loadConfig({ port: 0, dataDir: tmp2 });
+    delete config2.s3;
+    const host2 = await openDocHost(config2, store, mirror);
+    try {
+      expect(host2.pages().map(e => e.record.id)).toContain(host1.defaultPage.record.id);
+      const revived = host2.page(host1.defaultPage.record.id)!;
+      expect(revived.handle.doc().content).toContain("SURVIVES REDEPLOY");
+      // full history came back with the bytes, not just the text
+      expect(A.getAllChanges(revived.handle.doc()).length).toBeGreaterThan(1);
+    } finally {
+      host2.bridge.shutdown();
+      await host2.repo.shutdown();
+      rmSync(tmp1, { recursive: true, force: true });
+      rmSync(tmp2, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("a page in neither storage nor mirror is skipped, not fatal", async () => {
+    const store = new MemoryStore();
+    const ws = await store.ensurePublicWorkspace("public", "Public");
+    // a real automerge url whose data exists only in a throwaway repo
+    const ghostRepo = new Repo({ network: [] });
+    const ghostUrl = ghostRepo.create<MrkdwnDoc>({ title: "Ghost", content: "", comments: {} }).url;
+    await store.createDocument({
+      id: "ghost00001",
+      workspaceId: ws.id,
+      title: "Ghost",
+      slug: "ghost",
+      automergeUrl: ghostUrl, // valid url, but no storage and no mirror
+    });
+    const empty: ObjectMirror = { write: async () => {}, read: async () => null };
+    const tmp = mkdtempSync(join(tmpdir(), "mrkdwn-restore-3-"));
+    const config = loadConfig({ port: 0, dataDir: tmp });
+    delete config.s3;
+    const host = await openDocHost(config, store, empty);
+    try {
+      // the ghost is skipped; the workspace seeded a welcome page and booted
+      expect(host.pages().map(e => e.record.id)).not.toContain("ghost00001");
+      expect(host.pages().length).toBeGreaterThan(0);
+    } finally {
+      host.bridge.shutdown();
+      await host.repo.shutdown();
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  }, 30000);
 });
 
 describe("sameHeads", () => {

@@ -69,6 +69,9 @@ export function loadConfig(
   } else {
     state = { agentToken: newToken(), createdAt: new Date().toISOString() };
   }
+  // deployments with ephemeral disks set the token via env so agent invites
+  // survive redeploys (the generated one rotates with every fresh data dir)
+  if (process.env.MRKDWN_AGENT_TOKEN) state.agentToken = process.env.MRKDWN_AGENT_TOKEN;
 
   const s3 = s3ConfigFromEnv();
   // agent edits type in at human speed (set MRKDWN_AGENT_TYPING=off for instant)

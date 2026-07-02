@@ -22,19 +22,37 @@ import type { S3Config, ServerConfig } from "./config";
 import type { DocStore } from "./store";
 import type { PageEntry } from "./repo";
 
-/** The one S3 call the worker makes — Bun.S3Client satisfies it. */
+/** The S3 calls we make: the worker writes, boot-time restore reads. */
 export interface ObjectWriter {
   write(key: string, data: Uint8Array): Promise<unknown>;
 }
+export interface ObjectMirror extends ObjectWriter {
+  /** null when the object doesn't exist */
+  read(key: string): Promise<Uint8Array | null>;
+}
 
-export function createObjectWriter(s3: S3Config): ObjectWriter {
-  return new Bun.S3Client({
+export function createObjectMirror(s3: S3Config): ObjectMirror {
+  const client = new Bun.S3Client({
     accessKeyId: s3.accessKeyId,
     secretAccessKey: s3.secretAccessKey,
     bucket: s3.bucket,
     endpoint: s3.endpoint,
     region: "auto",
   });
+  return {
+    write: (key, data) => client.write(key, data),
+    async read(key) {
+      try {
+        return new Uint8Array(await client.file(key).arrayBuffer());
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
+export function mirrorKey(workspaceId: string, pageId: string): string {
+  return `${workspaceId}/${pageId}.automerge`;
 }
 
 interface DocState {
@@ -71,7 +89,7 @@ export class PersistWorker {
   }
 
   objectKey(pageId: string): string {
-    return `${this.workspaceId}/${pageId}.automerge`;
+    return mirrorKey(this.workspaceId, pageId);
   }
 
   /** Start mirroring a page. Persists once immediately as the baseline. */
@@ -179,5 +197,5 @@ export function startPersistence(
   workspaceId: string
 ): PersistWorker | undefined {
   if (!config.s3) return undefined;
-  return new PersistWorker(createObjectWriter(config.s3), store, workspaceId);
+  return new PersistWorker(createObjectMirror(config.s3), store, workspaceId);
 }
