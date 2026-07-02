@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>mrkdwn — the guided tour</title>
+<meta property="og:site_name" content="mrkdwn" />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="mrkdwn — the guided tour" />
+<meta property="og:description" content="How a keystroke becomes a conflict-free, durable edit — and how an AI agent pulls up a chair: a technical walkthrough of Automerge, Prisma Compute, Prisma Postgres, and object storage working together." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23191919'/%3E%3Ctext x='16' y='22' font-family='monospace' font-weight='bold' font-size='16' fill='%23fff' text-anchor='middle'%3EM%3C/text%3E%3C/svg%3E" />
+<style>
+  :root {
+    --bg: #fdfdfc;
+    --bg-soft: #f4f4f2;
+    --text: #1a1a1a;
+    --text-soft: #55555a;
+    --text-faint: #8e8e93;
+    --border: #e6e6e2;
+    --accent: #16a34a;
+    --human: #1971c2;
+    --agent: #c2255c;
+    --amber: #f59f00;
+    --red: #e03131;
+    --code-bg: #16161a;
+    --code-text: #e8e8ed;
+    --code-comment: #7b7b85;
+    --code-accent: #7ee2a8;
+    --code-blue: #8ec3f2;
+    --code-pink: #f2a3c0;
+    --maxw: 780px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #131315;
+      --bg-soft: #1b1b1f;
+      --text: #f0f0f2;
+      --text-soft: #a7a7b0;
+      --text-faint: #6e6e78;
+      --border: #29292e;
+      --code-bg: #0c0c0f;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  a { color: inherit; }
+  code, pre { font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; }
+
+  /* top nav */
+  nav {
+    position: sticky; top: 0; z-index: 10;
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 24px;
+    background: color-mix(in srgb, var(--bg) 84%, transparent);
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+  }
+  nav .brand { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-weight: 700; text-decoration: none; }
+  nav .brand span { color: var(--text-faint); font-weight: 400; }
+  nav .spacer { flex: 1; }
+  nav a.navlink { color: var(--text-soft); text-decoration: none; }
+  nav a.navlink:hover { color: var(--text); }
+
+  /* hero */
+  .hero { max-width: 900px; margin: 0 auto; padding: 15vh 24px 12vh; text-align: center; }
+  .hero .kicker { color: var(--accent); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; font-size: 13px; }
+  .hero h1 {
+    font-size: clamp(42px, 7.5vw, 84px);
+    line-height: 1.04; letter-spacing: -0.03em; font-weight: 800;
+    margin: 18px 0 26px;
+    min-height: 2.1em;
+  }
+  .caret { display: inline-block; width: 3px; height: 0.92em; vertical-align: -0.12em; border-radius: 2px; animation: blink 1.05s steps(1) infinite; }
+  .caret.human { background: var(--human); }
+  .caret.agent { background: var(--agent); }
+  @keyframes blink { 50% { opacity: 0; } }
+  .typed-agent { color: var(--agent); }
+  .hero p.lede { font-size: clamp(17px, 2.2vw, 21px); color: var(--text-soft); max-width: 640px; margin: 0 auto; }
+  .hero .scroll-hint { margin-top: 7vh; color: var(--text-faint); font-size: 13px; }
+  .hero .scroll-hint::after { content: "↓"; display: block; font-size: 18px; margin-top: 6px; animation: bob 1.6s ease-in-out infinite; }
+  @keyframes bob { 50% { transform: translateY(5px); } }
+
+  /* chapters */
+  section { max-width: var(--maxw); margin: 0 auto; padding: 9vh 24px; }
+  section + section { border-top: 1px solid var(--border); }
+  .kicker { color: var(--accent); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; font-size: 13px; }
+  section h2 {
+    font-size: clamp(30px, 4.6vw, 46px);
+    line-height: 1.1; letter-spacing: -0.025em; font-weight: 750;
+    margin: 12px 0 18px;
+  }
+  section p { color: var(--text-soft); font-size: 17px; margin: 0 0 16px; }
+  section p strong, section li strong { color: var(--text); }
+  section ul { color: var(--text-soft); font-size: 17px; padding-left: 22px; margin: 0 0 16px; }
+  section li { margin-bottom: 8px; }
+  section a { color: var(--text); text-decoration: underline; text-decoration-color: var(--text-faint); text-underline-offset: 3px; }
+  section a:hover { text-decoration-color: var(--text); }
+  .src { font-size: 14px; color: var(--text-faint); margin-top: -6px; }
+  .src a { color: var(--text-soft); }
+
+  /* reveal on scroll — hidden state only applies once JS confirms it can
+     reveal again (no-JS readers and odd environments see everything) */
+  .js .reveal { opacity: 0; transform: translateY(18px); transition: opacity 0.6s ease, transform 0.6s ease; }
+  .js .reveal.in { opacity: 1; transform: none; }
+
+  /* code blocks */
+  pre {
+    background: var(--code-bg); color: var(--code-text);
+    border-radius: 12px; padding: 18px 20px; overflow-x: auto;
+    font-size: 13.5px; line-height: 1.55; margin: 20px 0 8px;
+  }
+  pre .c { color: var(--code-comment); }
+  pre .g { color: var(--code-accent); }
+  pre .b { color: var(--code-blue); }
+  pre .p { color: var(--code-pink); }
+
+  /* the end-to-end pipeline */
+  .pipeline { display: grid; gap: 10px; margin: 26px 0 10px; }
+  .pipe-row { display: flex; align-items: center; gap: 12px; }
+  .pipe-node {
+    flex-shrink: 0;
+    border: 1px solid var(--border); border-radius: 12px;
+    background: var(--bg-soft);
+    padding: 10px 14px; font-size: 14px; font-weight: 600; min-width: 168px;
+  }
+  .pipe-node small { display: block; font-weight: 400; color: var(--text-faint); font-size: 12px; }
+  .pipe-arrow { color: var(--text-faint); font-size: 18px; flex-shrink: 0; }
+  .pipe-note { font-size: 14px; color: var(--text-soft); }
+  .pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; vertical-align: 1px; }
+  .pulse.human { background: var(--human); animation: pulse 2.4s ease-in-out infinite; }
+  .pulse.agent { background: var(--agent); animation: pulse 2.4s ease-in-out infinite 0.8s; }
+  .pulse.green { background: var(--accent); animation: pulse 2.4s ease-in-out infinite 1.6s; }
+  @keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; transform: scale(1.35); } }
+
+  /* merge demo */
+  .merge-demo { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 22px 0 10px; font-size: 14.5px; }
+  .merge-demo .col { border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; background: var(--bg-soft); }
+  .merge-demo .who { font-weight: 700; font-size: 12.5px; margin-bottom: 8px; }
+  .merge-demo .who.human { color: var(--human); }
+  .merge-demo .who.agent { color: var(--agent); }
+  .merge-demo .result { grid-column: 1 / -1; border-color: var(--accent); }
+  .merge-demo .who.result-label { color: var(--accent); }
+  .merge-demo code { background: transparent; }
+  .ins-h { color: var(--human); font-weight: 600; }
+  .ins-a { color: var(--agent); font-weight: 600; }
+  @media (max-width: 620px) { .merge-demo { grid-template-columns: 1fr; } }
+
+  /* dots legend */
+  .dots { display: flex; gap: 22px; margin: 18px 0 8px; font-size: 15px; color: var(--text-soft); flex-wrap: wrap; }
+  .dots .d { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; }
+
+  footer { max-width: var(--maxw); margin: 0 auto; padding: 8vh 24px 12vh; border-top: 1px solid var(--border); color: var(--text-faint); font-size: 14px; text-align: center; }
+  footer a { color: var(--text-soft); }
+</style>
+</head>
+<body>
+
+<nav>
+  <a class="brand" href="/">mrkdwn<span>.xyz</span></a>
+  <span class="spacer"></span>
+  <a class="navlink" href="/">Open the app</a>
+  <a class="navlink" href="https://github.com/prisma/mrkdwn">GitHub</a>
+</nav>
+
+<div class="hero">
+  <div class="kicker">The guided tour</div>
+  <h1 id="typed"><span class="caret human" id="hero-caret"></span></h1>
+  <p class="lede">mrkdwn is a collaborative markdown workspace where humans and AI agents are
+  first-class co-authors — built as one stateful Bun process on <strong>Prisma Compute</strong>,
+  with <strong>Prisma Postgres</strong>, object storage, and <strong>Automerge</strong> CRDTs.
+  Scroll to see how a keystroke becomes a conflict-free, durable edit — and how an agent pulls up a chair.</p>
+  <div class="scroll-hint">~3,000 lines of TypeScript, all of it linked below</div>
+</div>
+
+<section class="reveal">
+  <div class="kicker">The idea</div>
+  <h2>The document is a CRDT, not a file</h2>
+  <p>Most collaborative editors treat the document as a string and fight over it: locks,
+  operational-transform servers, "someone else edited this" dialogs. mrkdwn treats every page as an
+  <a href="https://automerge.org">Automerge</a> document — a data structure where <strong>every character
+  carries a permanent identity</strong>, every edit is an operation against those identities, and any two
+  peers holding any two versions can merge with a deterministic, commutative result.</p>
+  <p>That one decision shapes the whole system. There is no authoritative "current text" to guard, so the
+  server doesn't arbitrate writes — it just relays and persists operations. Humans type over websockets,
+  agents write over REST, and nobody ever sees a merge conflict, because the data structure makes
+  conflicts unrepresentable.</p>
+</section>
+
+<section class="reveal">
+  <div class="kicker">The whole system</div>
+  <h2>One keystroke, end to end</h2>
+  <div class="pipeline">
+    <div class="pipe-row">
+      <div class="pipe-node"><span class="pulse human"></span>Browser<small>CodeMirror 6 + Automerge wasm</small></div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-note">your keystroke becomes an Automerge <em>change</em> — an op with your actor id, synced over one websocket</div>
+    </div>
+    <div class="pipe-row">
+      <div class="pipe-node"><span class="pulse green"></span>Bun on Prisma Compute<small>sync relay · REST · workers</small></div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-note">the server merges it into its replica, fans it out to every peer, and scans it for @mentions</div>
+    </div>
+    <div class="pipe-row">
+      <div class="pipe-node"><span class="pulse agent"></span>Agents<small>REST + long-poll notifications</small></div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-note">agent edits arrive as <code>oldText → newText</code>, become splices, and are typed back in at human speed</div>
+    </div>
+    <div class="pipe-row">
+      <div class="pipe-node">S3 object storage<small>full doc + history, coalesced</small></div>
+      <div class="pipe-arrow">+</div>
+      <div class="pipe-node">Prisma Postgres<small>workspace &amp; page registry</small></div>
+    </div>
+  </div>
+  <p class="pipe-note">Nothing on the editing hot path waits for a database. Postgres holds what's
+  relational (workspaces, pages, slugs, timestamps); the CRDT holds what's collaborative; S3 holds
+  what must survive.</p>
+</section>
+
+<section class="reveal">
+  <div class="kicker">Automerge</div>
+  <h2>Conflicts don't get resolved. They never happen.</h2>
+  <p>Here's the mechanism, not the magic. Automerge models text as a sequence of characters where each
+  insertion is an operation: <em>"insert 'x' after the character with id <code>op-1234@actorA</code>"</em>.
+  Ids are <code>(counter, actorId)</code> pairs — globally unique, totally ordered, never reused. A delete
+  doesn't remove a character; it marks that id as a tombstone. Every peer applies every operation, and
+  because the operations reference <strong>identities instead of positions</strong>, applying them in any
+  order converges to the same document.</p>
+  <div class="merge-demo">
+    <div class="col">
+      <div class="who human">SOREN — offline on a train</div>
+      <code>Ship it <span class="ins-h">after the review</span></code>
+    </div>
+    <div class="col">
+      <div class="who agent">@CLAUDE — same moment, via REST</div>
+      <code>Ship it <span class="ins-a">on Tuesday</span></code>
+    </div>
+    <div class="col result">
+      <div class="who result-label">MERGED — identically, on every peer</div>
+      <code>Ship it <span class="ins-a">on Tuesday</span> <span class="ins-h">after the review</span></code>
+    </div>
+  </div>
+  <p>Both peers inserted "after the same character". The tie is broken by comparing op ids — arbitrary
+  but <em>deterministic</em>, so every replica picks the same winner and both insertions survive, character
+  for character. Nothing was overwritten, no one was asked to pick a side, and the loser of the tie-break
+  lost nothing but a few pixels of position.</p>
+  <p>The same identity trick powers everything subtle in mrkdwn. A <strong>cursor</strong> is a reference
+  to a character's op id, so it stays attached to <em>that character</em> no matter how much text moves
+  around it. Comment anchors are cursor pairs — quote text, edit above it all day, the highlight never
+  drifts (<a href="https://github.com/prisma/mrkdwn/blob/main/src/web/app/presence.ts">presence.ts</a>,
+  <a href="https://github.com/prisma/mrkdwn/blob/main/src/server/notifications.ts">notifications.ts</a>).
+  And because the history is never thrown away, <strong>attribution is derived, not recorded</strong>: diff
+  each change against its parents, pin the insertions with cursors, resolve them against today's text —
+  click any avatar and see exactly which characters they wrote
+  (<a href="https://github.com/prisma/mrkdwn/blob/main/src/shared/attribution.ts">attribution.ts</a>).</p>
+<pre><span class="c">// attribution.ts — who wrote what, derived from history</span>
+<span class="b">for</span> (<span class="b">const</span> raw <span class="b">of</span> A.<span class="g">getAllChanges</span>(doc)) {
+  <span class="b">const</span> change = A.<span class="g">decodeChange</span>(raw);
+  <span class="b">const</span> patches = A.<span class="g">diff</span>(doc, change.deps, [change.hash]);  <span class="c">// what did THIS change do?</span>
+  <span class="c">// each inserted span → two cursors, resolved against the current doc</span>
+}</pre>
+</section>
+
+<section class="reveal">
+  <div class="kicker">Prisma Compute</div>
+  <h2>One stateful process. That's the architecture.</h2>
+  <p>mrkdwn is the kind of app that fights serverless: a websocket per browser tab, agents parked on
+  25-second long-polls, a background worker flushing to S3, a wasm CRDT engine holding every open page
+  in memory, and disk state under <code>./data</code>. On Prisma Compute it's just… a process. One
+  <code>Bun.serve</code> owns HTTP, websockets, and static assets on a single port
+  (<a href="https://github.com/prisma/mrkdwn/blob/main/src/server/server.ts">server.ts</a>).</p>
+  <p>There's no message broker between browsers, because the process <em>is</em> the broker: Bun-native
+  websockets feed automerge-repo's sync protocol through an ~80-line bridge
+  (<a href="https://github.com/prisma/mrkdwn/blob/main/src/server/wsbridge.ts">wsbridge.ts</a>), and
+  ephemeral presence — cursors, "✏️ writing" flags, the agent's typewriter caret — rides the same
+  channel as document sync. Deploying is building the frontend and starting the process; state survives
+  restarts on a volume.</p>
+<pre><span class="c"># the whole production story</span>
+bun run build
+NODE_ENV=production DATABASE_URL=... MRKDWN_DATA=/data bun src/server/main.ts</pre>
+</section>
+
+<section class="reveal">
+  <div class="kicker">Prisma Postgres + Prisma Next</div>
+  <h2>Relational where relational wins</h2>
+  <p>Not everything wants to be a CRDT. Which workspaces exist, which pages live in them, what slug a
+  title maps to, when a page was last persisted — that's queryable, transactional, relational data.
+  It lives in <strong>Prisma Postgres</strong>, described by a
+  <a href="https://github.com/prisma/mrkdwn/blob/main/src/prisma/contract.prisma">contract</a> that is the
+  entire schema — two models, ~20 lines. <strong>Prisma Next</strong> turns it into a fully typed client;
+  <a href="https://github.com/prisma/mrkdwn/blob/main/src/server/store.ts">store.ts</a> is the only file
+  that talks to the database.</p>
+<pre><span class="c">// store.ts — the registry, fully typed from the contract</span>
+<span class="b">const</span> rows = <span class="b">await</span> db.orm.public.Document
+  .<span class="g">where</span>({ workspaceId })
+  .<span class="g">orderBy</span>(d =&gt; d.createdAt.<span class="g">asc</span>())
+  .<span class="g">all</span>();</pre>
+  <p>The division of labor is strict: <strong>Postgres is never on the editing hot path</strong>. Page
+  titles typed into the editor sync back to the registry on a debounce, re-deriving slugs; the
+  <code>persistedAt</code> column is written only after a successful S3 upload. In development you don't
+  even set up a database — the server boots a local Prisma Postgres via
+  <a href="https://github.com/prisma/mrkdwn/blob/main/src/server/devdb.ts">@prisma/dev</a> and applies the
+  contract on start.</p>
+</section>
+
+<section class="reveal">
+  <div class="kicker">Object storage</div>
+  <h2>Durability you can see</h2>
+  <p>Automerge documents serialize to a single compact binary — content <em>and</em> full history. A
+  background worker (<a href="https://github.com/prisma/mrkdwn/blob/main/src/server/persist.ts">persist.ts</a>)
+  mirrors every page to S3 as <code>{workspaceId}/{pageId}.automerge</code>. It dirty-tracks by document
+  heads and writes <strong>at most once per doc every two seconds</strong> — a burst of typing coalesces
+  into one PUT. Restoring a page is one GET and one <code>Automerge.load()</code>; the history comes back
+  with it.</p>
+<pre><span class="c">// persist.ts — the write discipline</span>
+<span class="c">// dirty? schedule at max(lastSave + 2s, now) → A.save(doc) → S3 PUT</span>
+<span class="c">// only THEN touch Postgres (persistedAt) and broadcast the new heads</span>
+state.entry.handle.<span class="g">broadcast</span>({ type: <span class="p">"persisted"</span>, heads });</pre>
+  <p>Those broadcast heads drive the most honest pixel in the app — the dot in the topbar. Every client
+  compares its own document heads against the last persisted heads:</p>
+  <div class="dots">
+    <span><span class="d" style="background: var(--accent)"></span><strong>green</strong> — everything durable in S3</span>
+    <span><span class="d" style="background: var(--amber)"></span><strong>amber</strong> — changes in flight, ≤ 2s out</span>
+    <span><span class="d" style="background: var(--red)"></span><strong>red</strong> — connection lost, editing locks</span>
+  </div>
+  <p class="src">Client side: <a href="https://github.com/prisma/mrkdwn/blob/main/src/web/app/durability.ts">durability.ts</a> —
+  when the socket drops, a transaction filter swallows local edits but keeps remote reconciliation alive for the reconnect.</p>
+</section>
+
+<section class="reveal">
+  <div class="kicker">Agent collaboration</div>
+  <h2>Agents don't get an API. They get a seat.</h2>
+  <p><strong>Joining.</strong> Hit <em>Invite your agent</em> on any page and paste the invite into Claude
+  Code, Codex — anything with a shell. The invite is scoped to that page and carries the URL, a bearer
+  token, and instructions. The agent names itself (<code>X-Agent</code> handle +
+  <code>X-Agent-Name</code> display name), announces presence, and is told to <strong>read the page for
+  work already waiting</strong> — unchecked to-dos and open questions count, not just @mentions
+  (<a href="https://github.com/prisma/mrkdwn/blob/main/src/server/skill.ts">skill.ts</a> — the invite
+  doubles as an installable Claude Code skill, served at <a href="/skill.md">/skill.md</a>).</p>
+  <p><strong>Watching.</strong> Agents don't poll the document — the document comes to them. A scanner
+  watches every page's changes for <code>@handle</code> mentions (in the text <em>and</em> in comment
+  threads), keyed by Automerge cursors so an edited line doesn't re-notify
+  (<a href="https://github.com/prisma/mrkdwn/blob/main/src/server/notifications.ts">notifications.ts</a>).
+  The agent parks on a long-poll and is told to stay parked for 30 minutes past the last instruction:</p>
+<pre><span class="c"># the agent's event loop — wakes early the moment a mention lands</span>
+<span class="b">while</span> true; <span class="b">do</span>
+  curl -s <span class="p">"$MRKDWN_URL/api/notifications?wait=25"</span> -H <span class="p">"X-Agent: claude"</span> ...
+<span class="b">done</span></pre>
+  <p><strong>Writing.</strong> Edits use the exact-match contract agents already know from their file
+  tools — <code>{ oldText, newText }</code>, atomic, with 409s that explain themselves
+  (<a href="https://github.com/prisma/mrkdwn/blob/main/src/server/api.ts">api.ts</a>). And because agent
+  text landing as a single paste feels alien next to human keystrokes, the server doesn't apply it
+  atomically: a <strong>typewriter</strong>
+  (<a href="https://github.com/prisma/mrkdwn/blob/main/src/server/typewriter.ts">typewriter.ts</a>) streams
+  each edit into the CRDT in 2–3 character chunks on a jittered ~35ms cadence, broadcasting the agent's
+  caret as it goes. Humans watch the agent <em>write</em>.</p>
+<pre><span class="c">// typewriter.ts — typing position rides a cursor, so concurrent</span>
+<span class="c">// human edits shift the caret instead of corrupting the text</span>
+<span class="b">const</span> pos = A.<span class="g">getCursorPosition</span>(doc, [<span class="p">"content"</span>], lastChar) + <span class="b">1</span>;
+handle.<span class="g">change</span>(d =&gt; A.<span class="g">splice</span>(d, [<span class="p">"content"</span>], pos, <span class="b">0</span>, chunk), { message });</pre>
+  <p>Requests queue per document, so an agent's follow-up edit always reads its own settled write. Every
+  chunk carries the agent's name in the change message — which is how attribution can tell agents apart
+  even though they all share the server's actor id. Click the agent's avatar: its contributions light up.</p>
+</section>
+
+<section class="reveal">
+  <div class="kicker">Keep digging</div>
+  <h2>Fork it. Break it. Ship your own.</h2>
+  <p>Everything above is ~3,000 lines of TypeScript in
+  <a href="https://github.com/prisma/mrkdwn">github.com/prisma/mrkdwn</a>, Apache-2.0, with 1,000+ tests.
+  Start with the <a href="https://github.com/prisma/mrkdwn/blob/main/README.md">README</a>, then:</p>
+  <ul>
+    <li><a href="https://github.com/prisma/mrkdwn/blob/main/src/server/server.ts">server.ts</a> — the one process: HTTP, websockets, workers</li>
+    <li><a href="https://github.com/prisma/mrkdwn/blob/main/src/shared/attribution.ts">attribution.ts</a> — who-wrote-what from CRDT history</li>
+    <li><a href="https://github.com/prisma/mrkdwn/blob/main/src/server/persist.ts">persist.ts</a> — coalesced S3 durability</li>
+    <li><a href="https://github.com/prisma/mrkdwn/blob/main/src/server/typewriter.ts">typewriter.ts</a> — agent edits at human speed</li>
+    <li><a href="https://github.com/prisma/mrkdwn/blob/main/src/prisma/contract.prisma">contract.prisma</a> — the entire database schema</li>
+  </ul>
+  <p><code>bun install &amp;&amp; bun run dev</code> is the whole setup — a local Prisma Postgres boots
+  itself. Then invite your agent and watch it type.</p>
+</section>
+
+<footer>
+  <p>Built on <a href="https://www.prisma.io">Prisma Compute</a> · <a href="https://www.prisma.io/postgres">Prisma Postgres</a> ·
+  <a href="https://github.com/prisma/prisma-next">Prisma Next</a> · <a href="https://automerge.org">Automerge</a> · <a href="https://bun.sh">Bun</a></p>
+  <p style="margin-top: 8px"><a href="/">Open the app</a> · <a href="https://github.com/prisma/mrkdwn">Source on GitHub</a></p>
+</footer>
+
+<script>
+  // hero: two collaborators type the headline — a human caret, then the agent's
+  (function () {
+    const h1 = document.getElementById("typed");
+    const caret = document.getElementById("hero-caret");
+    const partHuman = "Write together.";
+    const partAgent = " All of you.";
+    let i = 0;
+    function typeHuman() {
+      if (i < partHuman.length) {
+        h1.insertBefore(document.createTextNode(partHuman[i++]), caret);
+        setTimeout(typeHuman, 55 + Math.random() * 70);
+      } else {
+        setTimeout(() => { caret.className = "caret agent"; typeAgent(0); }, 550);
+      }
+    }
+    const agentSpan = document.createElement("span");
+    agentSpan.className = "typed-agent";
+    function typeAgent(j) {
+      if (j === 0) h1.insertBefore(agentSpan, caret);
+      if (j < partAgent.length) {
+        agentSpan.textContent += partAgent[j];
+        setTimeout(() => typeAgent(j + 1), 45 + Math.random() * 60);
+      }
+    }
+    typeHuman();
+  })();
+
+  // chapters fade in as they enter the viewport
+  if ("IntersectionObserver" in window) {
+    document.documentElement.classList.add("js");
+    const io = new IntersectionObserver(
+      entries => entries.forEach(e => e.isIntersecting && e.target.classList.add("in")),
+      { threshold: 0.12 }
+    );
+    document.querySelectorAll(".reveal").forEach(el => io.observe(el));
+  }
+</script>
+</body>
+</html>

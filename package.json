@@ -1,0 +1,50 @@
+{
+  "name": "mrkdwn",
+  "version": "0.1.0",
+  "description": "Collaborative markdown workspace where humans and AI agents are co-authors — a Prisma Compute demo app (Bun + Automerge + Prisma Postgres via Prisma Next)",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --hot src/server/main.ts",
+    "build": "bun build.ts",
+    "start": "bun run build && NODE_ENV=production bun src/server/main.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "contract:emit": "prisma-next contract emit"
+  },
+  "dependencies": {
+    "@automerge/automerge": "^3.2.6",
+    "@automerge/automerge-codemirror": "^0.2.0",
+    "@automerge/automerge-repo": "^2.5.6",
+    "@automerge/automerge-repo-network-websocket": "^2.5.6",
+    "@automerge/automerge-repo-react-hooks": "^2.5.6",
+    "@automerge/automerge-repo-storage-nodefs": "^2.5.6",
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.10.4",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/language-data": "^6.5.2",
+    "@codemirror/state": "^6.7.0",
+    "@codemirror/view": "^6.43.4",
+    "@lezer/highlight": "^1.2.3",
+    "@prisma-next/postgres": "^0.14.0",
+    "@prisma/dev": "^0.24.14",
+    "dotenv": "^17.4.2",
+    "node-emoji": "^2.2.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "@types/node": "^26.1.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.1",
+    "better-result": "^2.9.2",
+    "happy-dom": "^20.10.6",
+    "prisma-next": "^0.14.0",
+    "typescript": "^6.0.3"
+  }
+}

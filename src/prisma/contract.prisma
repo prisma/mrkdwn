@@ -1,0 +1,24 @@
+// use prisma-next
+
+model Workspace {
+  id        String     @id
+  handle    String     @unique
+  name      String
+  isPublic  Boolean
+  documents Document[]
+  createdAt DateTime   @default(now())
+}
+
+model Document {
+  id           String    @id
+  workspace    Workspace @relation(fields: [workspaceId], references: [id])
+  workspaceId  String
+  title        String
+  slug         String
+  automergeUrl String    @unique
+  /// when the doc's full Automerge file was last written to S3 — maintained
+  /// by the persist worker alongside the S3 write, never on the edit hot path
+  persistedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    temporal.updatedAt()
+}

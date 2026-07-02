@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "mrkdwn",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["src/server/main.ts"],
+      "port": 4545
+    }
+  ]
+}

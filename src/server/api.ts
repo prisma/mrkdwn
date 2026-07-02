@@ -1,0 +1,552 @@
+/**
+ * Agent-facing REST API. Everything under /api requires the bearer token
+ * except GET /api/status (UI badges — no secrets).
+ *
+ * Editing follows the "exact match" contract agents already know from their
+ * editing tools: send the precise text to replace. Ambiguity and misses are
+ * 409s with actionable hints. All edits become Automerge splices, so they
+ * merge cleanly with concurrent human keystrokes.
+ */
+import * as A from "@automerge/automerge";
+import { tokenMatches, type ServerConfig } from "./config";
+import type { DocHost, PageEntry } from "./repo";
+import type { PersistWorker } from "./persist";
+import { enqueue, singleSpliceDiff, typeSplices, type TypedSplice } from "./typewriter";
+import { isValidHandle, normalizeHandle, type NotificationCenter } from "./notifications";
+import { colorFor } from "../shared/identity";
+import {
+  nowId,
+  type Author,
+  type DocComment,
+  type MrkdwnDoc,
+  type PageMeta,
+  type PresenceMessage,
+  type StatusPayload,
+  type WorkspacePayload,
+} from "../shared/types";
+
+export interface ApiContext {
+  config: ServerConfig;
+  host: DocHost;
+  notifications: NotificationCenter;
+  persistence?: PersistWorker;
+}
+
+class ApiError extends Error {
+  constructor(
+    public status: number,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
+const json = (data: unknown, status = 200) =>
+  new Response(JSON.stringify(data, null, 2) + "\n", {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
+
+export async function handleApi(req: Request, url: URL, ctx: ApiContext): Promise<Response | undefined> {
+  const path = url.pathname;
+  if (!path.startsWith("/api/")) return undefined;
+  const method = req.method.toUpperCase();
+
+  try {
+    // -- unauthenticated: UI badges + the public workspace (v1 permissions
+    // are org-level, and the single public workspace is world-editable) --
+    // note the `await`s: async handlers must resolve inside this try, or an
+    // ApiError thrown after their first await would bypass the catch below
+    if (path === "/api/status" && method === "GET") return getStatus(ctx);
+    if (path === "/api/workspace" && method === "GET") return getWorkspace(ctx);
+    if (path === "/api/pages" && method === "POST") return await postPage(ctx, await body(req));
+
+    requireAuth(req, url, ctx.config);
+    const agent = agentHandle(req, url);
+    if (agent) ctx.notifications.markSeen(agent, agentName(req));
+    const page = resolvePage(ctx, url);
+
+    if (path === "/api/doc" && method === "GET") return getDoc(ctx, page, url);
+    if (path === "/api/doc" && method === "PUT") return await putDoc(ctx, page, await body(req), agent);
+    if (path === "/api/doc/edits" && method === "POST") return await postEdits(ctx, page, await body(req), agent);
+    if (path === "/api/doc/append" && method === "POST") return await postAppend(ctx, page, await body(req), agent);
+
+    if (path === "/api/comments" && method === "GET") return getComments(page, url);
+    if (path === "/api/comments" && method === "POST") return await postComment(ctx, page, await body(req), agent);
+    const commentAction = path.match(/^\/api\/comments\/([\w-]+)\/(replies|resolve)$/);
+    if (commentAction && method === "POST") {
+      const [, id, action] = commentAction;
+      if (action === "replies") return await postReply(ctx, page, id!, await body(req), agent);
+      return postResolve(page, id!, agent);
+    }
+
+    if (path === "/api/notifications" && method === "GET") return await getNotifications(ctx, url, agent);
+    if (path === "/api/notifications/ack" && method === "POST") return postAck(ctx, await body(req), agent);
+    if (path === "/api/presence" && method === "POST") return postPresence(ctx, page, agent);
+
+    throw new ApiError(404, `no such endpoint: ${method} ${path} — see /skill.md for the API reference`);
+  } catch (e) {
+    if (e instanceof ApiError) return json({ error: e.message }, e.status);
+    console.error("[mrkdwn] api error:", e);
+    return json({ error: "internal error" }, 500);
+  }
+}
+
+// ---------- auth & identity ----------
+
+function requireAuth(req: Request, url: URL, config: ServerConfig): void {
+  const header = req.headers.get("authorization");
+  const bearer = header?.match(/^Bearer\s+(.+)$/i)?.[1] ?? url.searchParams.get("token");
+  if (!tokenMatches(bearer ?? null, config.state.agentToken))
+    throw new ApiError(401, "missing or invalid token — send `Authorization: Bearer <token>` from your invite snippet");
+}
+
+function agentHandle(req: Request, url: URL): string | null {
+  const raw = req.headers.get("x-agent") ?? url.searchParams.get("agent");
+  if (!raw) return null;
+  const handle = normalizeHandle(raw);
+  if (!isValidHandle(handle)) throw new ApiError(400, `invalid agent handle: ${raw}`);
+  return handle;
+}
+
+/** Agents introduce themselves with `X-Agent-Name: <display name>`. */
+function agentName(req: Request): string | undefined {
+  const raw = req.headers.get("x-agent-name")?.trim();
+  return raw ? raw.slice(0, 40) : undefined;
+}
+
+/** Tag server-applied changes with the acting agent — every agent shares the
+ * server's Automerge actor, so attribution rides on the change message. */
+function changeOptions(agent: string | null): { message?: string } {
+  return agent ? { message: JSON.stringify({ agent }) } : {};
+}
+
+function requireAgent(agent: string | null): string {
+  if (!agent)
+    throw new ApiError(400, "identify yourself: send an `X-Agent: <handle>` header (e.g. X-Agent: claude)");
+  return agent;
+}
+
+async function body(req: Request): Promise<Record<string, unknown>> {
+  try {
+    const data = (await req.json()) as Record<string, unknown>;
+    if (typeof data !== "object" || data === null) throw new Error();
+    return data;
+  } catch {
+    throw new ApiError(400, "request body must be a JSON object");
+  }
+}
+
+function agentAuthor(handle: string, name?: string): Author {
+  return { id: `agent:${handle}`, name: name ?? handle, color: colorFor(`agent:${handle}`), kind: "agent" };
+}
+
+// ---------- workspace & pages ----------
+
+export function pageMeta(ctx: ApiContext, entry: PageEntry): PageMeta {
+  return {
+    id: entry.record.id,
+    title: entry.record.title,
+    slug: entry.record.slug,
+    path: ctx.host.pagePath(entry),
+    automergeUrl: entry.record.automergeUrl,
+    updatedAt: entry.record.updatedAt,
+  };
+}
+
+function getWorkspace(ctx: ApiContext): Response {
+  const payload: WorkspacePayload = {
+    workspace: { handle: ctx.host.workspace.handle, name: ctx.host.workspace.name },
+    pages: ctx.host.pages().map(e => pageMeta(ctx, e)),
+  };
+  return json(payload);
+}
+
+async function postPage(ctx: ApiContext, data: Record<string, unknown>): Promise<Response> {
+  const title = typeof data.title === "string" && data.title.trim() ? data.title.trim() : "Untitled";
+  const entry = await ctx.host.createPage(title);
+  return json({ ok: true, page: pageMeta(ctx, entry) }, 201);
+}
+
+/** `?page=<id>` targets a specific page; the first page is the default. */
+function resolvePage(ctx: ApiContext, url: URL): PageEntry {
+  const id = url.searchParams.get("page");
+  if (!id) return ctx.host.defaultPage;
+  const entry = ctx.host.page(id);
+  if (!entry) throw new ApiError(404, `no page with id ${id} — GET /api/workspace lists all pages`);
+  return entry;
+}
+
+// ---------- doc ----------
+
+function docPayload(ctx: ApiContext, entry: PageEntry) {
+  const doc = entry.handle.doc();
+  const comments = Object.values(doc.comments ?? {});
+  return {
+    title: doc.title,
+    markdown: doc.content,
+    heads: A.getHeads(doc),
+    automergeUrl: entry.handle.url,
+    page: pageMeta(ctx, entry),
+    openComments: comments.filter(c => !c.resolved).length,
+    web: ctx.config.baseUrl,
+  };
+}
+
+function getDoc(ctx: ApiContext, page: PageEntry, url: URL): Response {
+  if (url.searchParams.get("format") === "markdown")
+    return new Response(page.handle.doc().content, {
+      headers: { "content-type": "text/markdown; charset=utf-8" },
+    });
+  return json(docPayload(ctx, page));
+}
+
+async function putDoc(
+  ctx: ApiContext,
+  page: PageEntry,
+  data: Record<string, unknown>,
+  agent: string | null
+): Promise<Response> {
+  const { markdown, title } = data;
+  if (markdown === undefined && title === undefined)
+    throw new ApiError(400, "send { markdown } and/or { title }");
+  if (markdown !== undefined && typeof markdown !== "string") throw new ApiError(400, "markdown must be a string");
+  if (title !== undefined && typeof title !== "string") throw new ApiError(400, "title must be a string");
+
+  return enqueue(page.handle.url, async () => {
+    if (typeof title === "string") {
+      page.handle.change(d => A.updateText(d, ["title"], title), changeOptions(agent));
+    }
+    if (typeof markdown === "string") {
+      const typing = ctx.config.agentTyping;
+      if (!typing || !agent) {
+        page.handle.change(d => {
+          // updateText diffs old→new into splices, preserving concurrent edits
+          A.updateText(d, ["content"], markdown);
+        }, changeOptions(agent));
+      } else {
+        // one contiguous typed splice covering the changed region
+        const diff = singleSpliceDiff(page.handle.doc().content, markdown);
+        if (diff) await applyAsAgent(ctx, page, agent, [diff]);
+      }
+    }
+    return json({ ok: true, ...docPayload(ctx, page) });
+  });
+}
+
+interface EditOp {
+  oldText: string;
+  newText: string;
+  replaceAll?: boolean;
+}
+
+interface PlannedSplice {
+  index: number;
+  del: number;
+  /** exact text being deleted — lets the typewriter verify/relocate */
+  delText: string;
+  ins: string;
+}
+
+/** Validate + plan all edits against a plain string before touching the doc,
+ * so a bad edit can never half-apply. Returned splices are ordered for direct
+ * sequential application. */
+export function planEdits(text: string, edits: EditOp[]): { splices: PlannedSplice[]; finalText: string } {
+  const splices: PlannedSplice[] = [];
+  edits.forEach((e, i) => {
+    if (typeof e?.oldText !== "string" || typeof e?.newText !== "string")
+      throw new ApiError(400, `edits[${i}] must be { oldText, newText }`);
+    if (e.oldText === "")
+      throw new ApiError(400, `edits[${i}].oldText is empty — to add content use POST /api/doc/append`);
+
+    const indices = indicesOf(text, e.oldText);
+    if (indices.length === 0)
+      throw new ApiError(
+        409,
+        `edits[${i}]: oldText not found — the doc may have changed; GET /api/doc and retry with the exact current text`
+      );
+    if (indices.length > 1 && !e.replaceAll)
+      throw new ApiError(
+        409,
+        `edits[${i}]: oldText matches ${indices.length} locations — include more surrounding context, or set "replaceAll": true`
+      );
+
+    const targets = e.replaceAll ? [...indices].reverse() : [indices[0]!];
+    for (const index of targets) {
+      splices.push({ index, del: e.oldText.length, delText: e.oldText, ins: e.newText });
+      text = text.slice(0, index) + e.newText + text.slice(index + e.oldText.length);
+    }
+  });
+  return { splices, finalText: text };
+}
+
+function indicesOf(text: string, needle: string): number[] {
+  const out: number[] = [];
+  let i = 0;
+  while ((i = text.indexOf(needle, i)) !== -1) {
+    out.push(i);
+    i += needle.length;
+  }
+  return out;
+}
+
+/** Animate splices in at human typing speed (when configured + an agent is
+ * acting): per-doc queue keeps read-after-write for follow-up requests, and
+ * the caret broadcast makes humans see the agent write. */
+async function applyAsAgent(
+  ctx: ApiContext,
+  page: PageEntry,
+  agent: string | null,
+  splices: TypedSplice[]
+): Promise<void> {
+  const typing = ctx.config.agentTyping;
+  const handle = page.handle;
+  if (!typing || !agent) {
+    handle.change(d => {
+      for (const s of splices) A.splice(d, ["content"], s.index, s.delText.length, s.ins);
+    }, changeOptions(agent));
+    return;
+  }
+  await typeSplices(handle, splices, changeOptions(agent), typing, index =>
+    broadcastAgentPresence(ctx, agent, { index, typing: true }, page)
+  );
+  const last = splices[splices.length - 1];
+  if (last) showAgentAtIndex(ctx, page, agent, Math.min(last.index + last.ins.length, handle.doc().content.length));
+}
+
+async function postEdits(
+  ctx: ApiContext,
+  page: PageEntry,
+  data: Record<string, unknown>,
+  agent: string | null
+): Promise<Response> {
+  const edits = data.edits;
+  if (!Array.isArray(edits) || edits.length === 0)
+    throw new ApiError(400, 'send { "edits": [{ "oldText": "...", "newText": "..." }] }');
+
+  // plan inside the per-doc queue so a request that lands mid-animation
+  // validates against the settled content, not a half-typed intermediate
+  return enqueue(page.handle.url, async () => {
+    const { splices } = planEdits(page.handle.doc().content, edits as EditOp[]);
+    await applyAsAgent(ctx, page, agent, splices);
+    return json({ ok: true, applied: splices.length, ...docPayload(ctx, page) });
+  });
+}
+
+async function postAppend(
+  ctx: ApiContext,
+  page: PageEntry,
+  data: Record<string, unknown>,
+  agent: string | null
+): Promise<Response> {
+  const { markdown } = data;
+  if (typeof markdown !== "string" || markdown.length === 0) throw new ApiError(400, "send { markdown } to append");
+
+  return enqueue(page.handle.url, async () => {
+    const current = page.handle.doc().content;
+    const sep = current.length === 0 ? "" : current.endsWith("\n\n") ? "" : current.endsWith("\n") ? "\n" : "\n\n";
+    const at = current.length;
+    await applyAsAgent(ctx, page, agent, [{ index: at, delText: "", ins: sep + markdown }]);
+    return json({ ok: true, appendedAt: at, ...docPayload(ctx, page) });
+  });
+}
+
+// ---------- comments ----------
+
+interface CommentView {
+  id: string;
+  author: string;
+  authorKind: string;
+  body: string;
+  createdAt: number;
+  quote: string;
+  resolved: boolean;
+  /** current position of the anchored range; null when the text was deleted */
+  range: { start: number; end: number } | null;
+  replies: { id: string; author: string; body: string; createdAt: number }[];
+}
+
+function commentView(doc: A.Doc<MrkdwnDoc>, c: DocComment): CommentView {
+  let range: CommentView["range"] = null;
+  try {
+    const start = A.getCursorPosition(doc, ["content"], c.anchorStart);
+    const end = A.getCursorPosition(doc, ["content"], c.anchorEnd);
+    if (end > start) range = { start, end };
+  } catch {
+    range = null;
+  }
+  return {
+    id: c.id,
+    author: c.author.name,
+    authorKind: c.author.kind,
+    body: c.body,
+    createdAt: c.createdAt,
+    quote: c.quote,
+    resolved: c.resolved,
+    range,
+    replies: c.replies.map(r => ({ id: r.id, author: r.author.name, body: r.body, createdAt: r.createdAt })),
+  };
+}
+
+function getComments(page: PageEntry, url: URL): Response {
+  const doc = page.handle.doc();
+  const includeResolved = url.searchParams.get("includeResolved") === "1";
+  const comments = Object.values(doc.comments ?? {})
+    .filter(c => includeResolved || !c.resolved)
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .map(c => commentView(doc, c));
+  return json({ comments });
+}
+
+function postComment(ctx: ApiContext, page: PageEntry, data: Record<string, unknown>, agentMaybe: string | null): Response {
+  const agent = requireAgent(agentMaybe);
+  const bodyText = data.body;
+  if (typeof bodyText !== "string" || bodyText.trim().length === 0) throw new ApiError(400, "send { body }");
+
+  const handle = page.handle;
+  const doc = handle.doc();
+  let anchorStart: string;
+  let anchorEnd: string;
+  let quote = "";
+
+  const anchorText = data.anchorText;
+  if (anchorText !== undefined) {
+    if (typeof anchorText !== "string" || anchorText.length === 0)
+      throw new ApiError(400, "anchorText must be a non-empty string");
+    const indices = indicesOf(doc.content, anchorText);
+    if (indices.length === 0)
+      throw new ApiError(409, "anchorText not found in the document — GET /api/doc and quote the exact text");
+    const occurrence = Number(data.occurrence ?? 1);
+    if (indices.length > 1 && !data.occurrence)
+      throw new ApiError(
+        409,
+        `anchorText matches ${indices.length} locations — pass "occurrence": <1-based index> to pick one`
+      );
+    const index = indices[occurrence - 1];
+    if (index === undefined)
+      throw new ApiError(409, `occurrence ${occurrence} out of range (only ${indices.length} matches)`);
+    anchorStart = A.getCursor(doc, ["content"], index);
+    anchorEnd = A.getCursor(doc, ["content"], Math.min(index + anchorText.length, doc.content.length));
+    quote = anchorText;
+  } else {
+    // no anchor → a document-level comment pinned to the top
+    anchorStart = A.getCursor(doc, ["content"], "start");
+    anchorEnd = A.getCursor(doc, ["content"], "start");
+  }
+
+  const comment: DocComment = {
+    id: nowId("c"),
+    author: agentAuthor(agent, ctx.notifications.displayName(agent)),
+    body: bodyText.trim(),
+    createdAt: Date.now(),
+    anchorStart,
+    anchorEnd,
+    quote,
+    resolved: false,
+    replies: [],
+  };
+  handle.change(d => {
+    d.comments[comment.id] = comment;
+  });
+  return json({ ok: true, comment: commentView(handle.doc(), handle.doc().comments[comment.id]!) }, 201);
+}
+
+function postReply(ctx: ApiContext, page: PageEntry, id: string, data: Record<string, unknown>, agentMaybe: string | null): Response {
+  const agent = requireAgent(agentMaybe);
+  const bodyText = data.body;
+  if (typeof bodyText !== "string" || bodyText.trim().length === 0) throw new ApiError(400, "send { body }");
+  const handle = page.handle;
+  if (!handle.doc().comments[id]) throw new ApiError(404, `no comment with id ${id}`);
+  const reply = { id: nowId("r"), author: agentAuthor(agent, ctx.notifications.displayName(agent)), body: bodyText.trim(), createdAt: Date.now() };
+  handle.change(d => {
+    d.comments[id]!.replies.push(reply);
+  });
+  return json({ ok: true, comment: commentView(handle.doc(), handle.doc().comments[id]!) }, 201);
+}
+
+function postResolve(page: PageEntry, id: string, agentMaybe: string | null): Response {
+  requireAgent(agentMaybe);
+  const handle = page.handle;
+  if (!handle.doc().comments[id]) throw new ApiError(404, `no comment with id ${id}`);
+  handle.change(d => {
+    d.comments[id]!.resolved = true;
+  });
+  return json({ ok: true });
+}
+
+// ---------- notifications & presence ----------
+
+async function getNotifications(ctx: ApiContext, url: URL, agentMaybe: string | null): Promise<Response> {
+  const agent = requireAgent(agentMaybe);
+  const wait = Math.max(0, Number(url.searchParams.get("wait") ?? 0)) || 0;
+  const notifications = await ctx.notifications.waitForNotifications(agent, wait);
+  ctx.notifications.markSeen(agent); // long-polls keep the agent "online"
+  return json({
+    agent,
+    notifications,
+    hint:
+      notifications.length > 0
+        ? 'acknowledge with POST /api/notifications/ack {"ids": [...]} once handled'
+        : `no mentions right now — poll again with ?wait=${wait || 25} to long-poll`,
+  });
+}
+
+function postAck(ctx: ApiContext, data: Record<string, unknown>, agentMaybe: string | null): Response {
+  const agent = requireAgent(agentMaybe);
+  const ids = data.ids;
+  if (!Array.isArray(ids) || ids.some(i => typeof i !== "string"))
+    throw new ApiError(400, 'send { "ids": ["n_..."] }');
+  const acked = ctx.notifications.ack(agent, ids as string[]);
+  return json({ ok: true, acked });
+}
+
+function postPresence(ctx: ApiContext, page: PageEntry, agentMaybe: string | null): Response {
+  const agent = requireAgent(agentMaybe);
+  broadcastAgentPresence(ctx, agent, {}, page);
+  return json({ ok: true, agent, hint: "you now show as online in the doc — heartbeat every ~30s while working" });
+}
+
+function getStatus(ctx: ApiContext): Response {
+  const payload: StatusPayload = {
+    title: ctx.host.defaultPage.handle.doc().title,
+    docUrl: ctx.host.defaultPage.handle.url,
+    agents: ctx.notifications.statuses(),
+    persistence: ctx.persistence !== undefined,
+  };
+  return json(payload);
+}
+
+// ---------- agent presence in the live doc ----------
+
+/** Flash the agent's cursor at a doc position so humans see where it edited. */
+function showAgentAtIndex(ctx: ApiContext, page: PageEntry, agent: string, index: number): void {
+  broadcastAgentPresence(ctx, agent, { index, typing: true }, page);
+  setTimeout(() => broadcastAgentPresence(ctx, agent, { index, typing: false }, page), 2500);
+}
+
+export function broadcastAgentPresence(
+  ctx: ApiContext,
+  agent: string,
+  opts: { index?: number; typing?: boolean },
+  page?: PageEntry
+): void {
+  const entry = page ?? ctx.host.defaultPage;
+  const doc = entry.handle.doc();
+  let cursor: string | null = null;
+  if (opts.index !== undefined) {
+    try {
+      cursor = A.getCursor(doc, ["content"], Math.max(0, Math.min(opts.index, doc.content.length)));
+    } catch {
+      cursor = null;
+    }
+  }
+  const msg: PresenceMessage = {
+    type: "presence",
+    user: agentAuthor(agent, ctx.notifications.displayName(agent)),
+    anchor: cursor,
+    head: cursor,
+    typing: opts.typing,
+    ts: Date.now(),
+  };
+  entry.handle.broadcast(msg);
+}
