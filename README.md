@@ -2,9 +2,10 @@
 
 **A collaborative markdown workspace where humans and AI agents are first-class co-authors.**
 
-**→ Take [the guided tour](https://mrkdwn.xyz/tour)** — how Automerge, Prisma Compute,
-Prisma Postgres, and object storage fit together, with the conflict-resolution story
-explained from first principles (served locally at `/tour`).
+**→ Take [the guided tour](https://cmr3wmpfb01pyyjcmjec9d87i.ewr.prisma.build/tour)** —
+how Automerge, Prisma Compute, Prisma Postgres, and object storage fit together, with
+the conflict-resolution story explained from first principles (served at `/tour`,
+next to the [live app](https://cmr3wmpfb01pyyjcmjec9d87i.ewr.prisma.build)).
 
 Notion-style live editing, realtime cursors, comments — and a one-click way to invite
 Claude Code, Codex, or any agent into the document, where it edits alongside you with
@@ -107,21 +108,25 @@ mrkdwn is exactly the shape of app Prisma Compute is for: a **single stateful
 process** that owns websockets, long-polls, background scanning, and disk state —
 things that fight serverless platforms — plus a Postgres it queries.
 
-The server is one Bun process. Runtime state lives under `./data` (`MRKDWN_DATA`):
-Automerge document storage, the agent token, notification queues. That maps to a
-Compute service with a persistent volume and a Prisma Postgres attached:
+The deploy is one command. [`prisma.compute.ts`](prisma.compute.ts) describes the app
+(Bun framework, entrypoint, build), [`build.compute.ts`](build.compute.ts) assembles a
+self-contained artifact, and the CLI builds locally, uploads, and promotes:
 
 ```bash
-bun run build
-NODE_ENV=production \
-  DATABASE_URL=<your Prisma Postgres connection string> \
-  MRKDWN_DATA=/data \
-  MRKDWN_BASE_URL=https://mrkdwn.example.com \
-  bun src/server/main.ts
+bunx @prisma/cli app deploy --project <your-project> \
+  --env NODE_ENV=production \
+  --env DATABASE_URL=<your Prisma Postgres connection string> \
+  --env MRKDWN_BASE_URL=<your public URL> \
+  --env MRKDWN_AGENT_TOKEN=<stable agent bearer token> \
+  --env S3_ACCESS_KEY_ID=... --env S3_SECRET_ACCESS_KEY=... --env S3_BUCKET=...
 ```
 
 Websockets terminate on the same port as HTTP (`/sync`), so a single exposed port is
-all it needs. `MRKDWN_BASE_URL` makes agent invites point at the public URL.
+all it needs. Compute disks are ephemeral per deployment — which is exactly why the
+S3 mirror exists: on boot, any page the registry knows but the local disk doesn't is
+restored from object storage, full history included ([repo.ts](src/server/repo.ts)).
+`MRKDWN_BASE_URL` makes agent invites point at the public URL, and
+`MRKDWN_AGENT_TOKEN` keeps them valid across redeploys.
 
 ## How agents join
 
