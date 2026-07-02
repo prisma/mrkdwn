@@ -123,23 +123,34 @@
   pre .b { color: var(--code-blue); }
   pre .p { color: var(--code-pink); }
 
-  /* the end-to-end pipeline */
-  .pipeline { display: grid; gap: 10px; margin: 26px 0 10px; }
-  .pipe-row { display: flex; align-items: center; gap: 12px; }
-  .pipe-node {
-    flex-shrink: 0;
-    border: 1px solid var(--border); border-radius: 12px;
-    background: var(--bg-soft);
-    padding: 10px 14px; font-size: 14px; font-weight: 600; min-width: 168px;
-  }
-  .pipe-node small { display: block; font-weight: 400; color: var(--text-faint); font-size: 12px; }
-  .pipe-arrow { color: var(--text-faint); font-size: 18px; flex-shrink: 0; }
+  /* the edit-lifecycle architecture diagram */
   .pipe-note { font-size: 14px; color: var(--text-soft); }
-  .pulse { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; vertical-align: 1px; }
-  .pulse.human { background: var(--human); animation: pulse 2.4s ease-in-out infinite; }
-  .pulse.agent { background: var(--agent); animation: pulse 2.4s ease-in-out infinite 0.8s; }
-  .pulse.green { background: var(--accent); animation: pulse 2.4s ease-in-out infinite 1.6s; }
-  @keyframes pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; transform: scale(1.35); } }
+  .flow-wrap { margin: 28px -24px 6px; padding: 0 24px; overflow-x: auto; }
+  .flow-wrap svg { display: block; width: 100%; min-width: 780px; height: auto; }
+  .fnode { fill: var(--bg-soft); stroke: var(--border); stroke-width: 1; }
+  .fwrap { fill: transparent; stroke: var(--border); stroke-width: 1.5; stroke-dasharray: none; }
+  .ft { font-size: 15px; font-weight: 700; fill: var(--text); }
+  .fst { font-size: 13.5px; font-weight: 600; fill: var(--text); }
+  .fs { font-size: 12px; fill: var(--text-soft); }
+  .fm { font-size: 11px; fill: var(--text-faint); font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  svg a .fm:hover { fill: var(--text); text-decoration: underline; }
+  .fedge { fill: none; stroke-width: 1.6; }
+  .fedge.dashed { stroke-dasharray: 5 5; }
+  .fbadge circle { fill: var(--bg); stroke: currentColor; stroke-width: 1.6; }
+  .fbadge text { font-size: 11.5px; font-weight: 700; fill: currentColor; text-anchor: middle; }
+  @media (prefers-reduced-motion: reduce) { .flow-dot { display: none; } }
+
+  .flow-legend { color: var(--text-soft); font-size: 15.5px; padding-left: 0; margin: 18px 0 20px; list-style: none; counter-reset: step; }
+  .flow-legend li { counter-increment: step; margin-bottom: 10px; padding-left: 34px; position: relative; }
+  .flow-legend li::before {
+    content: counter(step); position: absolute; left: 0; top: 1px;
+    width: 21px; height: 21px; border-radius: 50%;
+    border: 1.5px solid var(--text-faint); color: var(--text-soft);
+    font-size: 11.5px; font-weight: 700; display: grid; place-items: center;
+  }
+  .flow-legend li:nth-child(-n+2)::before { border-color: var(--human); color: var(--human); }
+  .flow-legend li:nth-child(n+4):nth-child(-n+6)::before { border-color: var(--agent); color: var(--agent); }
+  .flow-legend li:nth-child(n+7)::before { border-color: var(--accent); color: var(--accent); }
 
   /* merge demo */
   .merge-demo { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 22px 0 10px; font-size: 14.5px; }
@@ -198,28 +209,146 @@
 <section class="reveal">
   <div class="kicker">The whole system</div>
   <h2>One keystroke, end to end</h2>
-  <div class="pipeline">
-    <div class="pipe-row">
-      <div class="pipe-node"><span class="pulse human"></span>Browser<small>CodeMirror 6 + Automerge wasm</small></div>
-      <div class="pipe-arrow">→</div>
-      <div class="pipe-note">your keystroke becomes an Automerge <em>change</em> — an op with your actor id, synced over one websocket</div>
-    </div>
-    <div class="pipe-row">
-      <div class="pipe-node"><span class="pulse green"></span>Bun on Prisma Compute<small>sync relay · REST · workers</small></div>
-      <div class="pipe-arrow">→</div>
-      <div class="pipe-note">the server merges it into its replica, fans it out to every peer, and scans it for @mentions</div>
-    </div>
-    <div class="pipe-row">
-      <div class="pipe-node"><span class="pulse agent"></span>Agents<small>REST + long-poll notifications</small></div>
-      <div class="pipe-arrow">→</div>
-      <div class="pipe-note">agent edits arrive as <code>oldText → newText</code>, become splices, and are typed back in at human speed</div>
-    </div>
-    <div class="pipe-row">
-      <div class="pipe-node">S3 object storage<small>full doc + history, coalesced</small></div>
-      <div class="pipe-arrow">+</div>
-      <div class="pipe-node">Prisma Postgres<small>workspace &amp; page registry</small></div>
-    </div>
+  <p>The complete life cycle of an edit — from the keypress to every peer's screen, through an
+  agent's hands, and into object storage. Follow the numbers.</p>
+
+  <div class="flow-wrap">
+  <svg viewBox="0 0 920 650" xmlns="http://www.w3.org/2000/svg" font-family="inherit" role="img"
+       aria-label="Architecture diagram: an edit flows from the browser over one websocket into the Bun process on Prisma Compute, fans out to peers, wakes the agent via the mention scanner, comes back through the REST typewriter, and is persisted to S3 with Postgres bookkeeping — then the durability dot turns green.">
+    <defs>
+      <marker id="m-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--human)"/>
+      </marker>
+      <marker id="m-pink" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--agent)"/>
+      </marker>
+      <marker id="m-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/>
+      </marker>
+      <marker id="m-gray" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="var(--text-faint)"/>
+      </marker>
+    </defs>
+
+    <!-- ═ boxes ═ -->
+    <!-- browser -->
+    <rect x="40" y="40" width="240" height="152" rx="14" class="fnode"/>
+    <text x="56" y="68" class="ft">Your browser</text>
+    <text x="56" y="90" class="fs">CodeMirror 6 + Automerge (wasm)</text>
+    <text x="56" y="108" class="fs">the op applies locally first — 0 ms</text>
+    <circle cx="61" cy="130" r="4" fill="var(--accent)"/>
+    <text x="72" y="134" class="fs">the dot: green = durable in S3</text>
+    <a href="https://github.com/prisma/mrkdwn/blob/main/src/web/editor/Editor.tsx"><text x="56" y="158" class="fm">src/web/editor/Editor.tsx</text></a>
+
+    <!-- peers -->
+    <rect x="40" y="470" width="240" height="70" rx="14" class="fnode"/>
+    <text x="56" y="497" class="ft">Every other browser</text>
+    <text x="56" y="518" class="fs">same socket, same merge — convergence</text>
+
+    <!-- bun container -->
+    <rect x="330" y="40" width="300" height="430" rx="16" class="fwrap"/>
+    <text x="480" y="68" text-anchor="middle" class="ft">One Bun process — Prisma Compute</text>
+
+    <rect x="350" y="86" width="260" height="52" rx="10" class="fnode"/>
+    <text x="362" y="107" class="fst">websocket sync relay</text>
+    <a href="https://github.com/prisma/mrkdwn/blob/main/src/server/wsbridge.ts"><text x="362" y="126" class="fm">wsbridge.ts</text></a>
+
+    <rect x="350" y="152" width="260" height="52" rx="10" class="fnode"/>
+    <text x="362" y="173" class="fst">Automerge repo + local disk</text>
+    <a href="https://github.com/prisma/mrkdwn/blob/main/src/server/repo.ts"><text x="362" y="192" class="fm">repo.ts</text></a>
+
+    <rect x="350" y="218" width="260" height="52" rx="10" class="fnode"/>
+    <text x="362" y="239" class="fst">REST API → typewriter</text>
+    <a href="https://github.com/prisma/mrkdwn/blob/main/src/server/typewriter.ts"><text x="362" y="258" class="fm">api.ts · typewriter.ts</text></a>
+
+    <rect x="350" y="284" width="260" height="52" rx="10" class="fnode"/>
+    <text x="362" y="305" class="fst">mention scanner</text>
+    <a href="https://github.com/prisma/mrkdwn/blob/main/src/server/notifications.ts"><text x="362" y="324" class="fm">notifications.ts</text></a>
+
+    <rect x="350" y="350" width="260" height="52" rx="10" class="fnode"/>
+    <text x="362" y="371" class="fst">persist worker — ≤ 1 write / 2 s</text>
+    <a href="https://github.com/prisma/mrkdwn/blob/main/src/server/persist.ts"><text x="362" y="390" class="fm">persist.ts</text></a>
+
+    <!-- agent -->
+    <rect x="680" y="40" width="200" height="172" rx="14" class="fnode"/>
+    <text x="696" y="68" class="ft">Your agent</text>
+    <text x="696" y="89" class="fs">Claude Code, Codex, …</text>
+    <text x="696" y="112" class="fm">GET /notifications?wait=25</text>
+    <text x="696" y="130" class="fm">POST /doc/edits</text>
+    <text x="696" y="155" class="fs">names itself, reads the page</text>
+    <text x="696" y="172" class="fs">for asks beyond @mentions</text>
+
+    <!-- s3 -->
+    <rect x="330" y="540" width="300" height="70" rx="14" class="fnode"/>
+    <text x="346" y="567" class="ft">S3 object storage</text>
+    <text x="346" y="589" class="fm">{workspace}/{page}.automerge — full history</text>
+
+    <!-- postgres -->
+    <rect x="680" y="540" width="200" height="70" rx="14" class="fnode"/>
+    <text x="696" y="567" class="ft">Prisma Postgres</text>
+    <text x="696" y="589" class="fs">registry · persistedAt</text>
+
+    <!-- ═ flows ═ -->
+    <path d="M282 112 H344" class="fedge" stroke="var(--human)" marker-end="url(#m-blue)" marker-start="url(#m-blue)"/>
+    <path d="M350 186 C 210 250, 142 360, 142 464" class="fedge" stroke="var(--text-faint)" marker-end="url(#m-gray)" marker-start="url(#m-gray)"/>
+    <path d="M610 310 C 700 300, 758 262, 772 218" class="fedge" stroke="var(--agent)" marker-end="url(#m-pink)"/>
+    <path d="M680 120 C 632 152, 622 192, 614 232" class="fedge" stroke="var(--agent)" marker-end="url(#m-pink)"/>
+    <path d="M340 244 V186" class="fedge" stroke="var(--agent)" marker-end="url(#m-pink)"/>
+    <path d="M480 404 V534" class="fedge" stroke="var(--accent)" marker-end="url(#m-green)"/>
+    <path d="M610 376 C 700 420, 762 470, 774 534" class="fedge" stroke="var(--text-faint)" marker-end="url(#m-gray)"/>
+    <path d="M348 382 C 296 336, 280 262, 274 198" class="fedge dashed" stroke="var(--accent)" marker-end="url(#m-green)"/>
+
+    <!-- animated flow dots (hidden when reduced motion is preferred) -->
+    <circle r="3.5" fill="var(--human)" class="flow-dot">
+      <animateMotion dur="2.4s" repeatCount="indefinite" path="M240 112 H346"/>
+    </circle>
+    <circle r="3.5" fill="var(--text-faint)" class="flow-dot">
+      <animateMotion dur="2.4s" begin="0.8s" repeatCount="indefinite" path="M350 186 C 210 250, 142 360, 142 464"/>
+    </circle>
+    <circle r="3.5" fill="var(--agent)" class="flow-dot">
+      <animateMotion dur="2.4s" begin="1.6s" repeatCount="indefinite" path="M680 120 C 632 152, 622 192, 614 232"/>
+    </circle>
+    <circle r="3.5" fill="var(--accent)" class="flow-dot">
+      <animateMotion dur="2.4s" begin="2.4s" repeatCount="indefinite" path="M480 404 V534"/>
+    </circle>
+    <circle r="3.5" fill="var(--accent)" class="flow-dot">
+      <animateMotion dur="2.4s" begin="3.2s" repeatCount="indefinite" path="M348 382 C 296 336, 280 262, 274 198"/>
+    </circle>
+
+    <!-- ═ step badges ═ -->
+    <g class="fbadge" style="color: var(--human)"><circle cx="60" cy="40" r="11"/><text x="60" y="44">1</text></g>
+    <g class="fbadge" style="color: var(--human)"><circle cx="313" cy="93" r="11"/><text x="313" y="97">2</text></g>
+    <g class="fbadge" style="color: var(--text-faint)"><circle cx="185" cy="295" r="11"/><text x="185" y="299">3</text></g>
+    <g class="fbadge" style="color: var(--agent)"><circle cx="712" cy="284" r="11"/><text x="712" y="288">4</text></g>
+    <g class="fbadge" style="color: var(--agent)"><circle cx="648" cy="164" r="11"/><text x="648" y="168">5</text></g>
+    <g class="fbadge" style="color: var(--agent)"><circle cx="340" cy="215" r="11"/><text x="340" y="219">6</text></g>
+    <g class="fbadge" style="color: var(--accent)"><circle cx="458" cy="470" r="11"/><text x="458" y="474">7</text></g>
+    <g class="fbadge" style="color: var(--accent)"><circle cx="706" cy="438" r="11"/><text x="706" y="442">8</text></g>
+    <g class="fbadge" style="color: var(--accent)"><circle cx="293" cy="285" r="11"/><text x="293" y="289">9</text></g>
+  </svg>
   </div>
+
+  <ol class="flow-legend">
+    <li><strong>A keystroke becomes data.</strong> CodeMirror dispatches a transaction; automerge-codemirror
+    turns it into a CRDT op carrying your actor id. It applies to the local document first — zero latency.</li>
+    <li><strong>One websocket carries everything.</strong> The change syncs to the Bun process over
+    <code>/sync</code>; presence (cursors, typing flags, the agent's caret) rides the same channel.</li>
+    <li><strong>Fan-out.</strong> The server merges the op into its replica, appends it to disk, and relays
+    it to every other peer. Each merges independently — all converge to the same text.</li>
+    <li><strong>Agents are woken, not polled-for.</strong> The mention scanner diffs each change; an
+    <code>@mention</code> resolves the agent's parked long-poll immediately.</li>
+    <li><strong>The agent answers in <code>oldText → newText</code>.</strong> Edits are validated atomically
+    against the settled document; misses and ambiguity come back as self-explaining 409s.</li>
+    <li><strong>The typewriter makes it human.</strong> The edit streams into the CRDT in 2–3 character
+    chunks on a jittered ~35 ms cadence, the agent's caret broadcast with every chunk.</li>
+    <li><strong>Durability is coalesced.</strong> The persist worker dirty-tracks by document heads and
+    writes the full Automerge file to S3 at most once per doc every two seconds.</li>
+    <li><strong>Postgres confirms, off the hot path.</strong> <code>persistedAt</code> is written only after
+    the S3 PUT succeeds — the editing path never waits on a database.</li>
+    <li><strong>The loop closes on your screen.</strong> The persisted heads are broadcast; every client
+    compares them to its own and the topbar dot turns green.</li>
+  </ol>
+
   <p class="pipe-note">Nothing on the editing hot path waits for a database. Postgres holds what's
   relational (workspaces, pages, slugs, timestamps); the CRDT holds what's collaborative; S3 holds
   what must survive.</p>
