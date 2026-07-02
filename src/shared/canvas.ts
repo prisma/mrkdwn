@@ -28,9 +28,13 @@ interface NodeBase {
   z: number;
 }
 
+/** mrkdwn extension to the spec: an optional shape on text nodes. Other
+ * JSON Canvas readers ignore the extra field and still render the text. */
+export type NodeShape = "rectangle" | "ellipse" | "diamond";
+
 export type CanvasNode = NodeBase &
   (
-    | { type: "text"; text: string }
+    | { type: "text"; text: string; shape?: NodeShape }
     | { type: "file"; file: string; subpath?: string }
     | { type: "link"; url: string }
     | { type: "group"; label?: string; background?: string; backgroundStyle?: "cover" | "ratio" | "repeat" }
@@ -147,7 +151,12 @@ export function parseSpecCanvas(input: unknown): SpecCanvas {
     };
     switch (n.type) {
       case "text":
-        nodes.push({ ...base, type: "text", text: typeof n.text === "string" ? n.text : "" });
+        nodes.push({
+          ...base,
+          type: "text",
+          text: typeof n.text === "string" ? n.text : "",
+          ...(n.shape === "rectangle" || n.shape === "ellipse" || n.shape === "diamond" ? { shape: n.shape } : {}),
+        });
         break;
       case "file":
         nodes.push({

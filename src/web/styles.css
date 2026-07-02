@@ -2228,3 +2228,241 @@ body.blk-grabbing * {
   border-radius: 10px;
   border: 1px solid var(--border);
 }
+
+/* canvas v2: bigger anchors with generous hit areas */
+.canvas-anchor {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: none;
+  cursor: crosshair;
+  z-index: 3;
+}
+.canvas-anchor span {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--bg);
+  border: 1.8px solid var(--accent);
+  transition: transform 0.1s ease;
+}
+.canvas-anchor:hover span {
+  transform: scale(1.35);
+}
+.canvas-anchor--top { top: -12px; left: calc(50% - 12px); }
+.canvas-anchor--bottom { bottom: -12px; left: calc(50% - 12px); }
+.canvas-anchor--left { left: -12px; top: calc(50% - 12px); }
+.canvas-anchor--right { right: -12px; top: calc(50% - 12px); }
+
+.canvas-node--droptarget {
+  outline: 2.5px solid var(--accent);
+  outline-offset: 3px;
+}
+.canvas-node--dimmed {
+  opacity: 0.25;
+}
+
+/* shapes (mrkdwn extension: text nodes with a shape) */
+.canvas-node--shape {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 16px;
+}
+.canvas-node--shape .canvas-md {
+  height: auto;
+  overflow: hidden;
+}
+.canvas-node--shape-ellipse {
+  padding: 20px 26px;
+}
+.canvas-node--shape-diamond {
+  padding: 24px 34px;
+  overflow: visible;
+}
+.canvas-diamond {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.canvas-node--shape-diamond > .canvas-md,
+.canvas-node--shape-diamond > .canvas-node-placeholder,
+.canvas-node--shape-diamond > .canvas-node-edit {
+  position: relative;
+}
+.canvas-tool-group {
+  position: relative;
+}
+.canvas-shape-menu {
+  position: absolute;
+  bottom: 46px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 5px;
+  box-shadow: var(--shadow);
+  animation: menu-in 0.14s ease;
+}
+.canvas-shape-menu button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--text-soft);
+  cursor: pointer;
+}
+.canvas-shape-menu button:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* link cards: text + explicit open affordance (never hijack clicks) */
+.canvas-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding: 10px 14px;
+  color: var(--text-soft);
+  font-size: 13.5px;
+  overflow: hidden;
+}
+.canvas-link > svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.canvas-link span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.canvas-link-open {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 15px;
+}
+.canvas-link-open:hover {
+  background: var(--accent-soft);
+}
+
+/* focus mode: a node expands to (almost) fullscreen */
+.focus-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: transparent;
+  transition: background 0.24s ease;
+}
+.focus-backdrop--on {
+  background: color-mix(in srgb, var(--bg) 40%, rgba(15, 15, 15, 0.42));
+}
+.focus-panel {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  transition: left 0.24s cubic-bezier(0.32, 0.72, 0.28, 1), top 0.24s cubic-bezier(0.32, 0.72, 0.28, 1),
+    width 0.24s cubic-bezier(0.32, 0.72, 0.28, 1), height 0.24s cubic-bezier(0.32, 0.72, 0.28, 1),
+    transform 0.24s cubic-bezier(0.32, 0.72, 0.28, 1);
+}
+.focus-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-soft);
+  flex-shrink: 0;
+}
+.focus-title {
+  font-size: 14px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.focus-close {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-soft);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.1s, color 0.1s;
+}
+.focus-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.focus-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.focus-editor {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 48px;
+}
+.focus-textarea {
+  flex: 1;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 14.5px;
+  line-height: 1.65;
+  padding: 22px 28px;
+}
+.focus-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  margin: auto;
+}
+.focus-link {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 24px 28px;
+}
+.focus-link .canvas-link-edit {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 14px;
+}

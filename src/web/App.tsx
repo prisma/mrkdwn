@@ -438,6 +438,7 @@ export function App(props: AppProps) {
                 pages={props.pages}
                 currentPageId={props.currentPageId}
                 onNavigate={props.onNavigate}
+                onCreatePage={props.onCreatePage}
                 readOnly={!connected}
               />
             ) : (
