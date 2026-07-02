@@ -6,6 +6,7 @@ model Workspace {
   name      String
   isPublic  Boolean
   documents Document[]
+  images    Image[]
   createdAt DateTime   @default(now())
 }
 
@@ -15,10 +16,25 @@ model Document {
   workspaceId  String
   title        String
   slug         String
+  /// document kind: null = markdown page, "canvas" = JSON Canvas board
+  kind         String?
   automergeUrl String    @unique
   /// when the doc's full Automerge file was last written to S3 — maintained
   /// by the persist worker alongside the S3 write, never on the edit hot path
   persistedAt  DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    temporal.updatedAt()
+}
+
+/// Pasted images: bytes live in S3 under images/{workspaceId}/{id}, this is
+/// the queryable record (dimensions cached for resize validation).
+model Image {
+  id          String    @id
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  workspaceId String
+  contentType String
+  width       Int
+  height      Int
+  byteSize    Int
+  createdAt   DateTime  @default(now())
 }

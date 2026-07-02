@@ -19,16 +19,30 @@ export interface WorkspaceRecord {
   isPublic: boolean;
 }
 
+export type DocumentKind = "markdown" | "canvas";
+
 export interface DocumentRecord {
   id: string;
   workspaceId: string;
   title: string;
   slug: string;
+  /** absent/"markdown" = markdown page; "canvas" = JSON Canvas board */
+  kind?: DocumentKind;
   automergeUrl: string;
   /** last completed S3 write (persist worker), if any */
   persistedAt?: number;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface ImageRecord {
+  id: string;
+  workspaceId: string;
+  contentType: string;
+  width: number;
+  height: number;
+  byteSize: number;
+  createdAt: number;
 }
 
 export interface DocStore {
@@ -40,6 +54,8 @@ export interface DocStore {
   /** Record a completed S3 write. Called by the persist worker only — never
    * on the edit hot path. */
   markPersisted(id: string, when: Date): Promise<void>;
+  createImage(rec: Omit<ImageRecord, "createdAt">): Promise<ImageRecord>;
+  getImage(id: string): Promise<ImageRecord | null>;
   close(): Promise<void>;
 }
 
@@ -72,7 +88,7 @@ export class PrismaStore implements DocStore {
   }
 
   async createDocument(rec: Omit<DocumentRecord, "createdAt" | "updatedAt" | "persistedAt">): Promise<DocumentRecord> {
-    const row = await this.orm.Document.create({ ...rec, updatedAt: new Date() });
+    const row = await this.orm.Document.create({ ...rec, kind: rec.kind ?? null, updatedAt: new Date() });
     return rowToDoc(row);
   }
 
@@ -82,6 +98,16 @@ export class PrismaStore implements DocStore {
 
   async markPersisted(id: string, when: Date): Promise<void> {
     await this.orm.Document.where({ id }).update({ persistedAt: when });
+  }
+
+  async createImage(rec: Omit<ImageRecord, "createdAt">): Promise<ImageRecord> {
+    const row = await this.orm.Image.create(rec);
+    return { ...rec, createdAt: row.createdAt.getTime() };
+  }
+
+  async getImage(id: string): Promise<ImageRecord | null> {
+    const row = await this.orm.Image.where({ id }).first();
+    return row ? { ...row, createdAt: row.createdAt.getTime() } : null;
   }
 
   async close(): Promise<void> {
@@ -94,6 +120,7 @@ function rowToDoc(row: {
   workspaceId: string;
   title: string;
   slug: string;
+  kind?: string | null;
   automergeUrl: string;
   persistedAt?: Date | null;
   createdAt: Date;
@@ -101,6 +128,7 @@ function rowToDoc(row: {
 }): DocumentRecord {
   return {
     ...row,
+    kind: row.kind === "canvas" ? "canvas" : undefined,
     persistedAt: row.persistedAt ? row.persistedAt.getTime() : undefined,
     createdAt: row.createdAt.getTime(),
     updatedAt: row.updatedAt.getTime(),
@@ -112,6 +140,7 @@ function rowToDoc(row: {
 export class MemoryStore implements DocStore {
   private workspaces = new Map<string, WorkspaceRecord>();
   private documents = new Map<string, DocumentRecord>();
+  private images = new Map<string, ImageRecord>();
 
   async ensurePublicWorkspace(handle: string, name: string): Promise<WorkspaceRecord> {
     let ws = [...this.workspaces.values()].find(w => w.handle === handle);
@@ -143,6 +172,16 @@ export class MemoryStore implements DocStore {
   async markPersisted(id: string, when: Date): Promise<void> {
     const doc = this.documents.get(id);
     if (doc) doc.persistedAt = when.getTime();
+  }
+
+  async createImage(rec: Omit<ImageRecord, "createdAt">): Promise<ImageRecord> {
+    const image: ImageRecord = { ...rec, createdAt: Date.now() };
+    this.images.set(image.id, image);
+    return image;
+  }
+
+  async getImage(id: string): Promise<ImageRecord | null> {
+    return this.images.get(id) ?? null;
   }
 
   async close(): Promise<void> {}

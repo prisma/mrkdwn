@@ -194,8 +194,10 @@ export function sameHeads(a: A.Heads, b: A.Heads): boolean {
 export function startPersistence(
   config: ServerConfig,
   store: DocStore,
-  workspaceId: string
+  workspaceId: string,
+  mirror?: ObjectMirror
 ): PersistWorker | undefined {
-  if (!config.s3) return undefined;
-  return new PersistWorker(createObjectMirror(config.s3), store, workspaceId);
+  const writer = mirror ?? (config.s3 ? createObjectMirror(config.s3) : undefined);
+  if (!writer) return undefined;
+  return new PersistWorker(writer, store, workspaceId);
 }

@@ -1,5 +1,6 @@
 /** Shared data model. The whole document — text, title, comments — lives in one
  * Automerge doc so everything syncs and merges together. */
+import type { CanvasData } from "./canvas";
 
 export type AuthorKind = "human" | "agent";
 
@@ -40,6 +41,9 @@ export interface MrkdwnDoc {
    * session actor here so contributions can be attributed to people; agent
    * edits are attributed via change messages instead (see attribution.ts). */
   authors?: { [actorId: string]: Author };
+  /** present on canvas pages: JSON Canvas data, CRDT-keyed by id
+   * (see shared/canvas.ts for the spec mapping) */
+  canvas?: CanvasData;
 }
 
 /** Ephemeral presence message, broadcast over the Automerge sync channel. */
@@ -97,6 +101,8 @@ export interface PageMeta {
   id: string;
   title: string;
   slug: string;
+  /** "markdown" pages edit as text; "canvas" pages are JSON Canvas boards */
+  kind: "markdown" | "canvas";
   /** `/{workspaceHandle}/{id}-{slug}` — the id does the lookup, slug is cosmetic */
   path: string;
   automergeUrl: string;

@@ -14,8 +14,10 @@ import type { ServerConfig } from "./config";
 import type { DocStore, DocumentRecord, WorkspaceRecord } from "./store";
 import type { MrkdwnDoc } from "../shared/types";
 import { newPageId, uniqueSlug } from "../shared/slug";
+import { emptyCanvas } from "../shared/canvas";
 import { WELCOME_DOC } from "./welcome";
 import { createObjectMirror, mirrorKey, type ObjectMirror } from "./persist";
+import type { DocumentKind } from "./store";
 
 const TITLE_SYNC_DEBOUNCE_MS = 400;
 
@@ -36,7 +38,7 @@ export interface DocHost {
   pages(): PageEntry[];
   page(id: string): PageEntry | undefined;
   pageBySlug(slug: string): PageEntry | undefined;
-  createPage(title: string): Promise<PageEntry>;
+  createPage(title: string, kind?: DocumentKind): Promise<PageEntry>;
   onPage(cb: (entry: PageEntry) => void): void;
   pagePath(entry: PageEntry): string;
 }
@@ -131,13 +133,20 @@ export async function openDocHost(
     return entry;
   };
 
-  const createEntry = async (title: string, initial?: MrkdwnDoc): Promise<PageEntry> => {
-    const handle = repo.create<MrkdwnDoc>(initial ?? { title, content: "", comments: {} });
+  const createEntry = async (title: string, kind?: DocumentKind, initial?: MrkdwnDoc): Promise<PageEntry> => {
+    const doc: MrkdwnDoc = initial ?? {
+      title,
+      content: "",
+      comments: {},
+      ...(kind === "canvas" ? { canvas: emptyCanvas() } : {}),
+    };
+    const handle = repo.create<MrkdwnDoc>(doc);
     const record = await store.createDocument({
       id: newPageId(),
       workspaceId: workspace.id,
       title,
       slug: uniqueSlug(title, takenSlugs()),
+      ...(kind === "canvas" ? { kind } : {}),
       automergeUrl: handle.url,
     });
     const entry: PageEntry = { record, handle };
@@ -176,7 +185,7 @@ export async function openDocHost(
   }
 
   if (entries.size === 0) {
-    const entry = await createEntry(WELCOME_DOC.title, WELCOME_DOC);
+    const entry = await createEntry(WELCOME_DOC.title, undefined, WELCOME_DOC);
     config.state.docUrl = entry.handle.url; // legacy pointer, kept for compat
     config.saveState();
   }
@@ -211,7 +220,7 @@ export async function openDocHost(
     pages: ordered,
     page: id => entries.get(id),
     pageBySlug: slug => ordered().find(e => e.record.slug === slug),
-    createPage: title => createEntry(title),
+    createPage: (title, kind) => createEntry(title, kind),
     onPage: cb => pageListeners.push(cb),
     pagePath: entry => `/${workspace.handle}/${entry.record.id}${entry.record.slug ? `-${entry.record.slug}` : ""}`,
   };

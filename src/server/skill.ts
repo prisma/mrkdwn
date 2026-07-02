@@ -10,6 +10,7 @@ export interface InvitePage {
   title: string;
   /** e.g. /public/2e3884382c-notion-mode */
   path: string;
+  kind: "markdown" | "canvas";
 }
 
 export function buildSnippet(config: ServerConfig, page: InvitePage): string {
@@ -31,9 +32,16 @@ Start by reading the full guide (API reference + collaboration etiquette):
 You can also install it as a skill: save it to ~/.claude/skills/mrkdwn-collab/SKILL.md
 
 Quick reference (all requests need the auth + identity headers):
-  Read page:    GET  ${base}/api/doc${pq}
+${
+  page.kind === "canvas"
+    ? `  This page is a CANVAS (JSON Canvas 1.0 — https://jsoncanvas.org):
+  Read canvas:  GET  ${base}/api/doc${pq}          → { kind: "canvas", canvas: { nodes, edges } }
+  Edit canvas:  PUT  ${base}/api/doc${pq}          {"canvas": {"nodes": [...], "edges": [...]}}
+                (full replace, merged per node — send back what you read, changed)`
+    : `  Read page:    GET  ${base}/api/doc${pq}
   Edit:         POST ${base}/api/doc/edits${pq}    {"edits":[{"oldText":"exact text","newText":"replacement"}]}
-  Append:       POST ${base}/api/doc/append${pq}   {"markdown":"## New section\\n..."}
+  Append:       POST ${base}/api/doc/append${pq}   {"markdown":"## New section\\n..."}`
+}
   Comments:     GET  ${base}/api/comments${pq}     (reply: POST /api/comments/<id>/replies${pq} {"body":"..."})
   Mentions:     GET  ${base}/api/notifications?wait=25   (long-poll; delivers @<your-handle> mentions)
 
@@ -104,6 +112,42 @@ Every doc/comment endpoint below targets the **first page by default**; add
 \`?page=<id>\` to work on another page. Notifications tell you which page a
 mention came from (\`page: { id, title }\`). In doc text, \`@page-slug\`
 references link to that page.
+
+## Canvas pages
+
+Some pages are **canvases** — [JSON Canvas 1.0](https://jsoncanvas.org) boards of
+nodes and edges instead of markdown. \`GET /api/workspace\` marks them with
+\`"kind": "canvas"\`; create one with \`POST /api/pages {"title": "...", "kind": "canvas"}\`.
+
+\`\`\`bash
+mk "$MRKDWN_URL/api/doc?page=<id>"      # → { kind: "canvas", canvas: { nodes: [...], edges: [...] } }
+mk -X PUT "$MRKDWN_URL/api/doc?page=<id>" -d '{
+  "canvas": {
+    "nodes": [
+      { "id": "a1b2c3d4e5f60708", "type": "text", "x": 40, "y": 40,
+        "width": 240, "height": 150, "color": "3", "text": "## Plan\\n- [ ] ship it" },
+      { "id": "b2c3d4e5f6071809", "type": "file", "x": 360, "y": 40,
+        "width": 380, "height": 300, "file": "runbook.md" }
+    ],
+    "edges": [
+      { "id": "c3d4e5f607182910", "fromNode": "a1b2c3d4e5f60708", "fromSide": "right",
+        "toNode": "b2c3d4e5f6071809", "toSide": "left", "toEnd": "arrow" }
+    ]
+  }
+}'
+\`\`\`
+
+The PUT replaces the whole canvas but is **merged per node**: read first, apply
+your changes, send everything back. Nodes you return unchanged keep any
+concurrent human edits (someone dragging a note mid-request loses nothing);
+nodes you omit are deleted, so never send a partial list.
+
+Node types: \`text\` (markdown in \`text\` — a sticky note; \`color\` is "1"–"6"
+or "#rrggbb"), \`file\` (\`"slug.md"\` embeds that workspace page live,
+\`"/api/images/<id>"\` shows an uploaded image), \`link\` (\`url\`), \`group\`
+(\`label\`). Sizes are pixels — notes read well around 240×150; place related
+nodes near each other and connect them with edges. @mentions inside text nodes
+notify agents exactly like doc text.
 
 ## Reading a document
 

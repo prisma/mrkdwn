@@ -5,7 +5,8 @@ import { openDocHost } from "./repo";
 import { NotificationCenter } from "./notifications";
 import { handleApi, broadcastAgentPresence, type ApiContext } from "./api";
 import { buildSnippet, skillMarkdown } from "./skill";
-import { startPersistence, type PersistWorker } from "./persist";
+import { createObjectMirror, startPersistence, type ObjectMirror, type PersistWorker } from "./persist";
+import { handleImages } from "./images";
 import type { SyncSocketData } from "./wsbridge";
 
 export interface RunningServer {
@@ -20,12 +21,16 @@ export interface StartOptions {
   /** Directory of a prebuilt web bundle (production; see build.ts). */
   webDist?: string;
   config?: ServerConfig;
+  /** object storage override (tests inject a fake; default: from config.s3) */
+  mirror?: ObjectMirror;
 }
 
 export async function startServer(opts: StartOptions = {}): Promise<RunningServer> {
   const config = opts.config ?? loadConfig();
   const store = createStore(config.databaseUrl);
-  const host = await openDocHost(config, store);
+  // one mirror shared by boot-restore, the persist worker, and image serving
+  const mirror = opts.mirror ?? (config.s3 ? createObjectMirror(config.s3) : undefined);
+  const host = await openDocHost(config, store, mirror);
 
   // eslint-disable-next-line prefer-const
   let ctx: ApiContext;
@@ -37,7 +42,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
   host.onPage(entry => notifications.watch(entry.record.id, entry.handle, () => entry.record.title));
 
   // durable storage: mirror every page's automerge file to S3 (when configured)
-  const persistence: PersistWorker | undefined = startPersistence(config, store, host.workspace.id);
+  const persistence: PersistWorker | undefined = startPersistence(config, store, host.workspace.id, mirror);
   if (persistence) {
     for (const entry of host.pages()) persistence.watch(entry);
     host.onPage(entry => persistence.watch(entry));
@@ -72,11 +77,20 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     if (url.pathname === "/api/agent-setup" && req.method === "GET") {
       const pageId = url.searchParams.get("page");
       const entry = (pageId ? host.page(pageId) : undefined) ?? host.defaultPage;
-      const page = { id: entry.record.id, title: entry.handle.doc().title, path: host.pagePath(entry) };
+      const page = {
+        id: entry.record.id,
+        title: entry.handle.doc().title,
+        path: host.pagePath(entry),
+        kind: (entry.record.kind === "canvas" ? "canvas" : "markdown") as "markdown" | "canvas",
+      };
       return new Response(buildSnippet(config, page), {
         headers: { "content-type": "text/plain; charset=utf-8" },
       });
     }
+
+    // pasted images: upload + cached (optionally resized) serving
+    const image = await handleImages(req, url, { store, mirror, workspaceId: host.workspace.id });
+    if (image) return image;
 
     const api = await handleApi(req, url, ctx);
     if (api) return api;
@@ -109,6 +123,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
       "/api/notifications",
       "/api/presence",
       "/api/agent-setup",
+      "/api/images",
     ]) {
       routes[p] = (req: Request) => handleRequest(req, server);
     }

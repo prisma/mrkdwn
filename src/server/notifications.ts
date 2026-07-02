@@ -219,6 +219,27 @@ export class NotificationCenter {
       });
     }
 
+    // canvas text nodes: an @mention on a sticky note is a task too — keyed
+    // by node id + text, so editing the note re-delivers only if the mention
+    // survives the edit under a changed text
+    for (const node of Object.values(doc.canvas?.nodes ?? {})) {
+      if (node.type !== "text" || !node.text) continue;
+      for (const m of scanMentions(node.text)) {
+        if (!known.has(m.handle)) continue;
+        found.push({
+          key: `${page.id}:canvas:${node.id}:${m.handle}`,
+          make: () => ({
+            id: nowId("n"),
+            agent: m.handle,
+            kind: "doc-mention",
+            createdAt: Date.now(),
+            snippet: mentionSnippet(node.text, m.index),
+            page: pageInfo(),
+          }),
+        });
+      }
+    }
+
     for (const comment of Object.values(doc.comments ?? {})) {
       const bodies = [
         { key: `comment:${comment.id}`, body: comment.body, from: comment.author?.name },

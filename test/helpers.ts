@@ -20,7 +20,7 @@ export interface TestWorld {
   stop(): Promise<void>;
 }
 
-export async function makeWorld(): Promise<TestWorld> {
+export async function makeWorld(opts: { mirror?: import("../src/server/persist").ObjectMirror } = {}): Promise<TestWorld> {
   const tmp = mkdtempSync(join(tmpdir(), "mrkdwn-test-"));
   const config = loadConfig({ port: 0, dataDir: tmp });
   // never mirror test docs to a real bucket (bun auto-loads .env, which may
@@ -28,7 +28,7 @@ export async function makeWorld(): Promise<TestWorld> {
   delete config.s3;
   // instant agent edits — the typewriter has its own tests
   delete config.agentTyping;
-  const running = await startServer({ config });
+  const running = await startServer({ config, mirror: opts.mirror });
   const base = `http://localhost:${running.server.port}`;
   const clients: Repo[] = [];
 

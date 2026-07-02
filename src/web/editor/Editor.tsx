@@ -28,6 +28,8 @@ import { blockEdit } from "./blockEdit";
 import { blockHandles } from "./blockHandles";
 import { tables } from "./tableWidget";
 import { authorHighlight, setAuthorSpotlight, type AuthorSpotlight } from "./authorHighlight";
+import { imagePreview } from "./imagePreview";
+import { imageFromDataTransfer, uploadImage } from "../app/images";
 
 export interface SelectionInfo {
   from: number;
@@ -81,6 +83,26 @@ const remoteChangesOutOfHistory = EditorState.transactionExtender.of(tr =>
 const readOnlyGuard = EditorState.transactionFilter.of(tr =>
   tr.startState.readOnly && tr.docChanged && !isReconcileTx(tr) ? [] : tr
 );
+
+/** Pasted images upload to S3 (via /api/images) and land as markdown. */
+const imagePaste = EditorView.domEventHandlers({
+  paste: (event, view) => {
+    const file = imageFromDataTransfer(event.clipboardData);
+    if (!file) return false;
+    event.preventDefault();
+    void uploadImage(file).then(up => {
+      if (!up) return;
+      const line = view.state.doc.lineAt(view.state.selection.main.head);
+      const prefix = line.length === 0 ? "" : "\n";
+      const insert = `${prefix}![image](${up.url})\n`;
+      view.dispatch({
+        changes: { from: line.to, insert },
+        selection: { anchor: line.to + insert.length },
+      });
+    });
+    return true;
+  },
+});
 
 export function Editor(props: EditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -170,6 +192,8 @@ export function Editor(props: EditorProps) {
           }),
           commentsExtension(id => propsRef.current.onSelectComment(id)),
           authorHighlight(),
+          imagePreview(),
+          imagePaste,
           mentionAutocomplete(() => propsRef.current.getMentionOptions()),
           selectionNotifier,
         ],

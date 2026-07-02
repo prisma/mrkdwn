@@ -12,6 +12,7 @@ import { tokenMatches, type ServerConfig } from "./config";
 import type { DocHost, PageEntry } from "./repo";
 import type { PersistWorker } from "./persist";
 import { enqueue, singleSpliceDiff, typeSplices, type TypedSplice } from "./typewriter";
+import { CanvasValidationError, canvasToSpec, emptyCanvas, parseSpecCanvas, reconcileCanvas } from "../shared/canvas";
 import { isValidHandle, normalizeHandle, type NotificationCenter } from "./notifications";
 import { colorFor } from "../shared/identity";
 import {
@@ -148,6 +149,7 @@ export function pageMeta(ctx: ApiContext, entry: PageEntry): PageMeta {
     id: entry.record.id,
     title: entry.record.title,
     slug: entry.record.slug,
+    kind: entry.record.kind === "canvas" ? "canvas" : "markdown",
     path: ctx.host.pagePath(entry),
     automergeUrl: entry.record.automergeUrl,
     updatedAt: entry.record.updatedAt,
@@ -164,7 +166,9 @@ function getWorkspace(ctx: ApiContext): Response {
 
 async function postPage(ctx: ApiContext, data: Record<string, unknown>): Promise<Response> {
   const title = typeof data.title === "string" && data.title.trim() ? data.title.trim() : "Untitled";
-  const entry = await ctx.host.createPage(title);
+  if (data.kind !== undefined && data.kind !== "markdown" && data.kind !== "canvas")
+    throw new ApiError(400, `kind must be "markdown" or "canvas"`);
+  const entry = await ctx.host.createPage(title, data.kind === "canvas" ? "canvas" : undefined);
   return json({ ok: true, page: pageMeta(ctx, entry) }, 201);
 }
 
@@ -182,22 +186,28 @@ function resolvePage(ctx: ApiContext, url: URL): PageEntry {
 function docPayload(ctx: ApiContext, entry: PageEntry) {
   const doc = entry.handle.doc();
   const comments = Object.values(doc.comments ?? {});
+  const meta = pageMeta(ctx, entry);
   return {
     title: doc.title,
-    markdown: doc.content,
+    ...(meta.kind === "canvas"
+      ? { kind: "canvas" as const, canvas: canvasToSpec(doc.canvas) }
+      : { markdown: doc.content }),
     heads: A.getHeads(doc),
     automergeUrl: entry.handle.url,
-    page: pageMeta(ctx, entry),
+    page: meta,
     openComments: comments.filter(c => !c.resolved).length,
     web: ctx.config.baseUrl,
   };
 }
 
 function getDoc(ctx: ApiContext, page: PageEntry, url: URL): Response {
-  if (url.searchParams.get("format") === "markdown")
+  if (url.searchParams.get("format") === "markdown") {
+    if (page.record.kind === "canvas")
+      throw new ApiError(400, "this page is a canvas — GET /api/doc (no format param) returns its JSON Canvas data");
     return new Response(page.handle.doc().content, {
       headers: { "content-type": "text/markdown; charset=utf-8" },
     });
+  }
   return json(docPayload(ctx, page));
 }
 
@@ -207,11 +217,34 @@ async function putDoc(
   data: Record<string, unknown>,
   agent: string | null
 ): Promise<Response> {
-  const { markdown, title } = data;
-  if (markdown === undefined && title === undefined)
-    throw new ApiError(400, "send { markdown } and/or { title }");
+  const { markdown, title, canvas } = data;
+  const isCanvas = page.record.kind === "canvas";
+  if (markdown === undefined && title === undefined && canvas === undefined)
+    throw new ApiError(400, isCanvas ? "send { canvas } and/or { title }" : "send { markdown } and/or { title }");
   if (markdown !== undefined && typeof markdown !== "string") throw new ApiError(400, "markdown must be a string");
   if (title !== undefined && typeof title !== "string") throw new ApiError(400, "title must be a string");
+  if (markdown !== undefined && isCanvas)
+    throw new ApiError(400, "this page is a canvas — PUT { canvas: { nodes, edges } } (JSON Canvas 1.0) instead of markdown");
+  if (canvas !== undefined && !isCanvas)
+    throw new ApiError(400, "this page is markdown — send { markdown }, or create a canvas page via POST /api/pages { kind: \"canvas\" }");
+
+  if (canvas !== undefined) {
+    let spec;
+    try {
+      spec = parseSpecCanvas(canvas);
+    } catch (e) {
+      if (e instanceof CanvasValidationError) throw new ApiError(400, `invalid canvas: ${e.message}`);
+      throw e;
+    }
+    return enqueue(page.handle.url, async () => {
+      page.handle.change(d => {
+        if (typeof title === "string") A.updateText(d, ["title"], title);
+        if (!d.canvas) d.canvas = emptyCanvas();
+        reconcileCanvas(d.canvas, spec);
+      }, changeOptions(agent));
+      return json({ ok: true, ...docPayload(ctx, page) });
+    });
+  }
 
   return enqueue(page.handle.url, async () => {
     if (typeof title === "string") {
@@ -321,6 +354,8 @@ async function postEdits(
   agent: string | null
 ): Promise<Response> {
   const edits = data.edits;
+  if (page.record.kind === "canvas")
+    throw new ApiError(400, "this page is a canvas — GET /api/doc for its JSON, then PUT /api/doc { canvas } to edit");
   if (!Array.isArray(edits) || edits.length === 0)
     throw new ApiError(400, 'send { "edits": [{ "oldText": "...", "newText": "..." }] }');
 
@@ -340,6 +375,8 @@ async function postAppend(
   agent: string | null
 ): Promise<Response> {
   const { markdown } = data;
+  if (page.record.kind === "canvas")
+    throw new ApiError(400, "this page is a canvas — GET /api/doc for its JSON, then PUT /api/doc { canvas } to edit");
   if (typeof markdown !== "string" || markdown.length === 0) throw new ApiError(400, "send { markdown } to append");
 
   return enqueue(page.handle.url, async () => {

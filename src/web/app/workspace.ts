@@ -39,12 +39,12 @@ export function useWorkspace(intervalMs = 5000) {
   return { workspace, refresh };
 }
 
-export async function createPageRequest(title?: string): Promise<PageMeta | null> {
+export async function createPageRequest(title?: string, kind?: "markdown" | "canvas"): Promise<PageMeta | null> {
   try {
     const res = await fetch("/api/pages", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title, ...(kind ? { kind } : {}) }),
     });
     if (!res.ok) return null;
     const data = (await res.json()) as { page: PageMeta };

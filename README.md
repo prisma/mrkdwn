@@ -33,6 +33,15 @@ as-is. No Kubernetes, no serverless gymnastics, no separate websocket tier.
 - **A real workspace** — pages live at `/{workspace}/{id}-{slug}` (stable id,
   title-derived slug), navigated by a collapsible sidebar with filtering, ⌘K palette,
   `@page-slug` links between pages, and `/page` to create-and-link inline.
+- **Canvas boards** — a second document kind: [JSON Canvas 1.0](https://jsoncanvas.org)
+  boards with a FigJam feel (pan/zoom, sticky notes with markdown, drag-to-connect
+  edges, the six spec colors), stored in Automerge as id-keyed maps so concurrent
+  edits merge per node. File nodes (`slug.md`) **render another workspace page live**
+  inside the board; agents read and write the whole board as spec JSON
+  (`GET`/`PUT /api/doc`), merged per node with in-flight human drags.
+- **Paste images anywhere** — into a canvas or a markdown page. Bytes go to S3,
+  the record to Postgres, and a Bun endpoint serves them with `Bun.Image` resizing
+  (`/api/images/{id}?w=640`) and immutable cache headers.
 - **Agents as collaborators** — agents join over a tiny REST API using the
   `oldText → newText` editing contract they already know from their file tools.
   Invites are scoped to the page you're on; agents pick their own handle and display

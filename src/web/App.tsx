@@ -16,6 +16,7 @@ import { Header } from "./components/Header";
 import { Sidebar } from "./components/Sidebar";
 import { CommandPalette } from "./components/CommandPalette";
 import { CommentsPanel, type DraftComment, type PositionedComment } from "./components/CommentsPanel";
+import { CanvasEditor } from "./canvas/CanvasEditor";
 import { InviteAgentModal } from "./components/InviteAgentModal";
 import { SelectionToolbar } from "./components/SelectionToolbar";
 import type { PageMeta } from "../shared/types";
@@ -30,7 +31,7 @@ interface AppProps {
   /** create without navigating (the `/page` inline-link flow) */
   onCreatePage(title?: string): Promise<PageMeta | null>;
   /** create, open, and land in the (selected) title */
-  onCreateAndOpenPage(title?: string): Promise<PageMeta | null>;
+  onCreateAndOpenPage(title?: string, kind?: "markdown" | "canvas"): Promise<PageMeta | null>;
   /** this page was just created — focus + select its title on mount */
   focusTitle: boolean;
   onFocusTitleConsumed(): void;
@@ -59,6 +60,7 @@ export function App(props: AppProps) {
   const status = useAgentStatus();
   const connected = useConnected(adapter);
   const durability = useDurability(handle, connected, status?.persistence ?? false);
+  const pageKind = props.pages.find(pg => pg.id === props.currentPageId)?.kind ?? "markdown";
   const editorApi = useRef<EditorApi | null>(null);
   const titleRef = useRef<HTMLInputElement>(null);
 
@@ -408,9 +410,10 @@ export function App(props: AppProps) {
           collapsed={!sidebarOpen}
           onNavigate={props.onNavigate}
           onCreatePage={() => void props.onCreateAndOpenPage()}
+          onCreateCanvas={() => void props.onCreateAndOpenPage(undefined, "canvas")}
         />
-        <main className="doc-main">
-          <div className="doc-column">
+        <main className={"doc-main" + (pageKind === "canvas" ? " doc-main--canvas" : "")}>
+          <div className={pageKind === "canvas" ? "canvas-column" : "doc-column"}>
             <input
               ref={titleRef}
               className="title-input"
@@ -429,6 +432,15 @@ export function App(props: AppProps) {
                 }
               }}
             />
+            {pageKind === "canvas" ? (
+              <CanvasEditor
+                handle={handle}
+                pages={props.pages}
+                currentPageId={props.currentPageId}
+                onNavigate={props.onNavigate}
+                readOnly={!connected}
+              />
+            ) : (
             <div className="editor-wrap">
               <Editor
                 handle={handle}
@@ -458,6 +470,7 @@ export function App(props: AppProps) {
                 />
               )}
             </div>
+            )}
           </div>
         </main>
 
