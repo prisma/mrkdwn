@@ -5,9 +5,9 @@
  * - pan: drag the background or scroll; zoom: ⌘/ctrl + scroll (to cursor)
  * - nodes: notes, shapes, sections, page embeds, links, images; drag to
  *   move, corner handle to resize, Delete to remove
- * - double-click any node → focus mode: it animates up to fill most of the
- *   screen (page embeds mount the real markdown editor, notes get a large
- *   writing surface) with a close button in the header
+ * - double-click edits notes/shapes/links/sections inline; double-clicking
+ *   a page embed animates it up to a near-fullscreen panel with the real
+ *   markdown editor and a close button in the header
  * - edges: drag from a side anchor; the draft snaps to the hovered target
  * - text commits are unmount-safe: clicking away never loses input
  */
@@ -349,6 +349,7 @@ export function CanvasEditor(p: CanvasEditorProps) {
                 bringToFront(node.id);
               }}
               onHover={h => setHovered(h ? node.id : null)}
+              onEdit={() => setEditing(node.id)}
               onDoneEditing={() => setEditing(null)}
               onFocus={el => focusNode(node.id, el)}
               onCreatePage={p.onCreatePage}
@@ -491,6 +492,7 @@ interface NodeViewProps {
   readOnly: boolean;
   onSelect(): void;
   onHover(h: boolean): void;
+  onEdit(): void;
   onDoneEditing(): void;
   onFocus(el: HTMLElement): void;
   onCreatePage(title?: string): Promise<PageMeta | null>;
@@ -584,7 +586,12 @@ function NodeView(p: NodeViewProps) {
       onDoubleClick={e => {
         e.stopPropagation();
         if (p.readOnly || p.editing) return;
-        if (rootRef.current) p.onFocus(rootRef.current);
+        // page embeds expand to the full editor; everything else edits inline
+        if (node.type === "file" && !node.file.startsWith("/api/images/")) {
+          if (rootRef.current) p.onFocus(rootRef.current);
+        } else if (node.type !== "file") {
+          p.onEdit();
+        }
       }}
     >
       {shape === "diamond" && <DiamondBackdrop node={node} />}
@@ -782,10 +789,10 @@ function ColorDots(p: { node: CanvasNode; mutate(fn: (c: CanvasData) => void): v
   );
 }
 
-// ---------- focus mode ----------
+// ---------- focus mode (page embeds only) ----------
 
-/** Double-click expansion: the node animates from its canvas position to a
- * near-fullscreen panel. Page embeds mount the real markdown editor. */
+/** Double-click expansion for embedded pages: the node animates from its
+ * canvas position to a near-fullscreen panel with the real markdown editor. */
 function FocusOverlay(p: {
   node: CanvasNode;
   fromRect: DOMRect;
@@ -823,13 +830,7 @@ function FocusOverlay(p: {
   const page = node.type === "file" && !node.file.startsWith("/api/images/")
     ? p.pages.find(pg => pg.slug === node.file.replace(/\.md$/, ""))
     : undefined;
-
-  const title =
-    node.type === "text" ? (node.shape ? "Shape" : "Note")
-    : node.type === "link" ? node.url || "Link"
-    : node.type === "group" ? node.label || "Section"
-    : node.file.startsWith("/api/images/") ? "Image"
-    : page ? `${page.title || "Untitled"}` : node.file;
+  const title = page ? page.title || "Untitled" : node.type === "file" ? node.file : "";
 
   const style: React.CSSProperties = expanded
     ? { left: "50%", top: "56px", transform: "translateX(-50%)", width: "min(1080px, 94vw)", height: "calc(100vh - 112px)" }
@@ -853,85 +854,15 @@ function FocusOverlay(p: {
           </button>
         </div>
         <div className="focus-body">
-          {expanded && !closing && <FocusContent {...p} page={page} />}
+          {expanded && !closing &&
+            (page ? (
+              <PageEditor page={page} pages={p.pages} onNavigate={p.onNavigate} />
+            ) : (
+              <div className="canvas-node-placeholder">page not found</div>
+            ))}
         </div>
       </div>
     </div>
-  );
-}
-
-function FocusContent(p: {
-  node: CanvasNode;
-  pages: PageMeta[];
-  readOnly: boolean;
-  onNavigate(id: string): void;
-  mutate(fn: (c: CanvasData) => void): void;
-  page: PageMeta | undefined;
-}) {
-  const { node } = p;
-
-  if (node.type === "file" && node.file.startsWith("/api/images/")) {
-    return <img className="focus-image" src={node.file} alt="" />;
-  }
-  if (node.type === "file") {
-    return p.page ? (
-      <PageEditor page={p.page} pages={p.pages} onNavigate={p.onNavigate} />
-    ) : (
-      <div className="canvas-node-placeholder">page not found</div>
-    );
-  }
-  if (node.type === "text") {
-    return (
-      <CommitField
-        multiline
-        className="focus-textarea"
-        initial={node.text}
-        placeholder="Write markdown…"
-        onCommit={text =>
-          p.mutate(c => {
-            const n = c.nodes[node.id];
-            if (n && n.type === "text") n.text = text;
-          })
-        }
-      />
-    );
-  }
-  if (node.type === "link") {
-    return (
-      <div className="focus-link">
-        <CommitField
-          multiline={false}
-          className="canvas-node-edit canvas-link-edit"
-          initial={node.url}
-          placeholder="https://…"
-          onCommit={url =>
-            p.mutate(c => {
-              const n = c.nodes[node.id];
-              if (n && n.type === "link") n.url = url.trim();
-            })
-          }
-        />
-        {node.url && (
-          <a className="btn" href={node.url} target="_blank" rel="noreferrer">
-            Open ↗
-          </a>
-        )}
-      </div>
-    );
-  }
-  return (
-    <CommitField
-      multiline={false}
-      className="canvas-node-edit canvas-group-edit"
-      initial={node.type === "group" ? (node.label ?? "") : ""}
-      placeholder="Section name"
-      onCommit={label =>
-        p.mutate(c => {
-          const n = c.nodes[node.id];
-          if (n && n.type === "group") n.label = label;
-        })
-      }
-    />
   );
 }
 
