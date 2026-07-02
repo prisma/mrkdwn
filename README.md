@@ -7,6 +7,8 @@ how Automerge, Prisma Compute, Prisma Postgres, and object storage fit together,
 the conflict-resolution story explained from first principles (served at `/tour`,
 next to the [live app](https://cmr3wmpfb01pyyjcmjec9d87i.ewr.prisma.build)).
 
+[![mrkdwn rendering its welcome document: Notion-style live markdown with colors, task lists, and the agent invite in the top bar](.github/screenshot.png)](https://cmr3wmpfb01pyyjcmjec9d87i.ewr.prisma.build)
+
 Notion-style live editing, realtime cursors, comments — and a one-click way to invite
 Claude Code, Codex, or any agent into the document, where it edits alongside you with
 its own avatar, cursor, and comment threads.
