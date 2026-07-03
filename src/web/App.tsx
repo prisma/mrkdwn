@@ -18,6 +18,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { CommentsPanel, type DraftComment, type PositionedComment } from "./components/CommentsPanel";
 import { CanvasEditor } from "./canvas/CanvasEditor";
 import { HtmlView } from "./components/HtmlView";
+import { usePageEmbeds } from "./components/PageEmbed";
 import { InviteAgentModal } from "./components/InviteAgentModal";
 import { SelectionToolbar } from "./components/SelectionToolbar";
 import type { PageMeta } from "../shared/types";
@@ -378,6 +379,9 @@ export function App(props: AppProps) {
     return page?.slug ?? null;
   }, [props.onCreatePage]);
 
+  // `![[slug]]` embed blocks mount React inside CodeMirror widgets
+  const mountEmbed = usePageEmbeds(props.pages, props.onNavigate);
+
   if (!doc) return null;
 
   return (
@@ -464,6 +468,7 @@ export function App(props: AppProps) {
                 getPageLinks={() => pageLinksRef.current}
                 onOpenPage={openPage}
                 createPage={createLinkedPage}
+                mountEmbed={mountEmbed}
                 onExitTop={focusTitleFromEditor}
                 onReady={api => {
                   editorApi.current = api;

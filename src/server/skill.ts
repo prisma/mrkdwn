@@ -127,7 +127,9 @@ mk -X POST $MRKDWN_URL/api/pages -d '{"title": "Burndown", "kind": "html"}'     
 Every doc/comment endpoint below targets the **first page by default**; add
 \`?page=<id>\` to work on another page. Notifications tell you which page a
 mention came from (\`page: { id, title }\`). In doc text, \`@page-slug\`
-references link to that page.
+references link to that page — and a line containing only \`![[page-slug]]\`
+**embeds** that page (any kind: markdown, canvas, or html) as a live block
+humans see rendered inside the document.
 
 ## Canvas pages
 

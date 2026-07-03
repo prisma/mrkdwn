@@ -2619,3 +2619,116 @@ body.blk-grabbing * {
   /* scaled + centered inline; inert so canvas drags stay canvas drags */
   pointer-events: none;
 }
+
+/* `![[slug]]` page embeds inside markdown documents.
+ * Padding, never margins — CodeMirror's height map must stay honest. */
+.cm-page-embed {
+  padding: 6px 0 10px;
+}
+.md-embed {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--bg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+.md-embed--missing {
+  padding: 12px 16px;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+.md-embed-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-soft);
+}
+.md-embed-title {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.md-embed-loading {
+  padding: 18px;
+  color: var(--text-faint);
+  font-size: 13px;
+}
+.md-embed-md {
+  padding: 12px 16px;
+  max-height: 380px;
+  overflow: auto;
+  font-size: 14px;
+}
+.md-embed-html {
+  position: relative;
+  overflow: hidden;
+  background: #fff;
+}
+.md-embed-html .html-frame {
+  position: absolute;
+  top: 0;
+}
+.md-embed-canvas {
+  position: relative;
+  overflow: hidden;
+  background-color: var(--bg-soft);
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+.md-embed-canvas-world {
+  position: absolute;
+  top: 0;
+  transform-origin: top left;
+}
+.md-embed-canvas-world .canvas-edges {
+  position: absolute;
+  overflow: visible;
+  width: 1px;
+  height: 1px;
+  --canvas-edge: var(--text-faint);
+}
+.md-thumb-node {
+  position: absolute;
+  box-sizing: border-box;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.md-thumb-frame {
+  background: color-mix(in srgb, var(--bg-soft) 55%, transparent);
+  border-radius: 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-soft);
+}
+.md-thumb-shape {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+.md-thumb-text {
+  position: relative;
+  font-size: 13px;
+}
+.md-thumb-img {
+  object-fit: cover;
+  padding: 0;
+}
+.md-thumb-file,
+.md-thumb-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--text-soft);
+  background: var(--bg);
+}

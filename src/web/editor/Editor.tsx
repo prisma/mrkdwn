@@ -29,6 +29,8 @@ import { blockHandles } from "./blockHandles";
 import { tables } from "./tableWidget";
 import { authorHighlight, setAuthorSpotlight, type AuthorSpotlight } from "./authorHighlight";
 import { imagePreview } from "./imagePreview";
+import { pageEmbeds } from "./embedExt";
+import type { MountEmbed } from "../components/PageEmbed";
 import { imageFromDataTransfer, uploadImage } from "../app/images";
 
 export interface SelectionInfo {
@@ -68,6 +70,8 @@ interface EditorProps {
   onOpenPage(slug: string): void;
   /** `/page`: create a top-level page, resolve its slug (null = failed) */
   createPage(): Promise<string | null>;
+  /** render a live page embed (`![[slug]]` lines) into a widget element */
+  mountEmbed: MountEmbed;
   /** ArrowUp with nowhere to go — the caret leaves the doc into the title */
   onExitTop(): void;
   onReady(api: EditorApi): void;
@@ -193,6 +197,7 @@ export function Editor(props: EditorProps) {
           commentsExtension(id => propsRef.current.onSelectComment(id)),
           authorHighlight(),
           imagePreview(),
+          pageEmbeds(() => propsRef.current.mountEmbed),
           imagePaste,
           mentionAutocomplete(() => propsRef.current.getMentionOptions()),
           selectionNotifier,

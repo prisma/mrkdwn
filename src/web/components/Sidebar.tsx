@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { PageMeta } from "../../shared/types";
+import { PAGE_DRAG_MIME } from "../editor/embedExt";
 
 interface SidebarProps {
   pages: PageMeta[];
@@ -37,6 +38,13 @@ export function Sidebar(p: SidebarProps) {
               className={"sidebar-page" + (page.id === p.currentPageId ? " sidebar-page--active" : "")}
               onClick={() => p.onNavigate(page.id)}
               title={`${page.title || "Untitled"}.${pageExt(page.kind)}`}
+              draggable
+              onDragStart={e => {
+                // drop into a markdown page to embed it (see editor/embedExt)
+                e.dataTransfer.setData(PAGE_DRAG_MIME, page.slug);
+                e.dataTransfer.setData("text/plain", `![[${page.slug}]]`);
+                e.dataTransfer.effectAllowed = "copy";
+              }}
             >
               {page.kind === "canvas" ? (
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
