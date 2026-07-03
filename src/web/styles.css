@@ -1878,18 +1878,30 @@ body.blk-grabbing * {
   border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.07);
-  overflow: hidden;
   cursor: default;
   transition: box-shadow 0.12s ease;
+}
+/* content clips inside the body; selection chrome (palette, handles,
+ * anchors, selectbox) lives outside it so the node itself can stay
+ * overflow-visible on every shape */
+.canvas-node-body {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: inherit;
 }
 .canvas-node:hover {
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.1);
 }
-.canvas-node--selected {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+/* thin, sharp-cornered box so the resize bounds read clearly on any shape */
+.canvas-selectbox {
+  position: absolute;
+  inset: -3px;
+  border: 1.5px solid var(--accent);
+  pointer-events: none;
+  z-index: 2;
 }
-.canvas-node--text {
+.canvas-node--text .canvas-node-body {
   padding: 12px 14px;
 }
 .canvas-node--group {
@@ -2019,6 +2031,8 @@ body.blk-grabbing * {
 /* page embeds */
 .canvas-node--file {
   background: var(--bg);
+}
+.canvas-node--file .canvas-node-body {
   display: flex;
   flex-direction: column;
 }
@@ -2266,7 +2280,7 @@ body.blk-grabbing * {
 }
 
 /* shapes (mrkdwn extension: text nodes with a shape) */
-.canvas-node--shape {
+.canvas-node--shape .canvas-node-body {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2277,12 +2291,11 @@ body.blk-grabbing * {
   height: auto;
   overflow: hidden;
 }
-.canvas-node--shape-ellipse {
+.canvas-node--shape-ellipse .canvas-node-body {
   padding: 20px 26px;
 }
-.canvas-node--shape-diamond {
+.canvas-node--shape-diamond .canvas-node-body {
   padding: 24px 34px;
-  overflow: visible;
 }
 .canvas-diamond {
   position: absolute;
@@ -2291,9 +2304,9 @@ body.blk-grabbing * {
   height: 100%;
   pointer-events: none;
 }
-.canvas-node--shape-diamond > .canvas-md,
-.canvas-node--shape-diamond > .canvas-node-placeholder,
-.canvas-node--shape-diamond > .canvas-node-edit {
+.canvas-node--shape-diamond .canvas-node-body > .canvas-md,
+.canvas-node--shape-diamond .canvas-node-body > .canvas-node-placeholder,
+.canvas-node--shape-diamond .canvas-node-body > .canvas-node-edit {
   position: relative;
 }
 .canvas-tool-group {

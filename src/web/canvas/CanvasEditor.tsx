@@ -708,8 +708,11 @@ function NodeView(p: NodeViewProps) {
         }
       }}
     >
-      {shape === "diamond" && <DiamondBackdrop node={node} />}
-      <NodeContent {...p} />
+      <div className="canvas-node-body">
+        {shape === "diamond" && <DiamondBackdrop node={node} />}
+        <NodeContent {...p} />
+      </div>
+      {p.selected && <div className="canvas-selectbox" />}
       {p.selected && !p.readOnly && (
         <>
           {(["nw", "ne", "sw", "se"] as ResizeCorner[]).map(corner => (
@@ -1172,6 +1175,16 @@ function edgePath(a: { x: number; y: number }, aSide: NodeSide, b: { x: number; 
   return `M ${a.x} ${a.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${b.x} ${b.y}`;
 }
 
+/** Marker ids per edge color, so arrowheads match their line. */
+function arrowId(color: string | undefined): string {
+  return color ? `canvas-arrow-${color.replace("#", "x")}` : "canvas-arrow";
+}
+
+function edgeStroke(color: string | undefined): string {
+  if (!color) return "var(--canvas-edge)";
+  return CANVAS_PRESETS[color]?.fg ?? color;
+}
+
 function EdgeLayer(p: {
   canvas: CanvasData;
   draft: { from: string; side: NodeSide; x: number; y: number; targetId: string | null } | null;
@@ -1179,11 +1192,26 @@ function EdgeLayer(p: {
   onSelect(id: string): void;
 }) {
   const edges = Object.values(p.canvas.edges);
+  const markerColors = [...new Set(edges.map(e => e.color).filter((c): c is string => !!c))];
   return (
     <svg className="canvas-edges">
       <defs>
-        <marker id="canvas-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" fill="var(--canvas-edge)" />
+        {[undefined, ...markerColors].map(color => (
+          <marker
+            key={color ?? "default"}
+            id={arrowId(color)}
+            viewBox="0 0 10 10"
+            refX="8.5"
+            refY="5"
+            markerWidth="7"
+            markerHeight="7"
+            orient="auto-start-reverse"
+          >
+            <path d="M0,0 L10,5 L0,10 z" fill={edgeStroke(color)} />
+          </marker>
+        ))}
+        <marker id="canvas-arrow-draft" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)" />
         </marker>
       </defs>
       {edges.map(edge => {
@@ -1196,7 +1224,8 @@ function EdgeLayer(p: {
         const a = anchorPoint(from, fromSide);
         const b = anchorPoint(to, toSide);
         const d = edgePath(a, fromSide, b, toSide);
-        const stroke = edge.color ? (CANVAS_PRESETS[edge.color]?.fg ?? edge.color) : "var(--canvas-edge)";
+        const stroke = edgeStroke(edge.color);
+        const marker = `url(#${arrowId(edge.color)})`;
         return (
           <g key={edge.id} className={"canvas-edge" + (p.selected === edge.id ? " canvas-edge--selected" : "")}>
             <path className="canvas-edge-hit" d={d} onPointerDown={e => { e.stopPropagation(); p.onSelect(edge.id); }} />
@@ -1204,8 +1233,8 @@ function EdgeLayer(p: {
               className="canvas-edge-line"
               d={d}
               style={{ stroke }}
-              markerEnd={(edge.toEnd ?? "arrow") === "arrow" ? "url(#canvas-arrow)" : undefined}
-              markerStart={edge.fromEnd === "arrow" ? "url(#canvas-arrow)" : undefined}
+              markerEnd={(edge.toEnd ?? "arrow") === "arrow" ? marker : undefined}
+              markerStart={edge.fromEnd === "arrow" ? marker : undefined}
             />
             {edge.label && p.selected !== edge.id && (
               <text className="canvas-edge-label" x={(a.x + b.x) / 2} y={(a.y + b.y) / 2 - 8} textAnchor="middle">
@@ -1224,7 +1253,7 @@ function EdgeLayer(p: {
           // snap the draft end to the side it would actually connect to
           const end = target ? anchorPoint(target, nearestSide(target, { x: p.draft.x, y: p.draft.y })) : { x: p.draft.x, y: p.draft.y };
           const endSide = target ? nearestSide(target, { x: p.draft.x, y: p.draft.y }) : "left";
-          return <path className="canvas-edge-line canvas-edge--draft" d={edgePath(a, p.draft.side, end, endSide)} markerEnd="url(#canvas-arrow)" />;
+          return <path className="canvas-edge-line canvas-edge--draft" d={edgePath(a, p.draft.side, end, endSide)} markerEnd="url(#canvas-arrow-draft)" />;
         })()}
     </svg>
   );
