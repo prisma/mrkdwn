@@ -2495,3 +2495,50 @@ body.blk-grabbing * {
   background: var(--bg);
   box-shadow: 0 0 0 1.5px var(--accent);
 }
+
+/* canvas v3: corner resize handles on all four corners */
+.canvas-resize--nw { left: -6px; top: -6px; right: auto; bottom: auto; cursor: nwse-resize; }
+.canvas-resize--ne { right: -6px; top: -6px; left: auto; bottom: auto; cursor: nesw-resize; }
+.canvas-resize--sw { left: -6px; bottom: -6px; right: auto; top: auto; cursor: nesw-resize; }
+.canvas-resize--se { right: -6px; bottom: -6px; left: auto; top: auto; cursor: nwse-resize; }
+
+/* frames: named, tinted, carry their contents */
+.canvas-node--group .canvas-group-label {
+  top: 8px;
+  left: 12px;
+  font-size: 12.5px;
+}
+.canvas-node--group {
+  border-radius: 12px;
+}
+
+/* edge label + color controls at the midpoint */
+.canvas-edge-controls {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 10px));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  z-index: 5;
+}
+.canvas-edge-label-input {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 5px 12px;
+  width: 150px;
+  text-align: center;
+  outline: none;
+}
+.canvas-edge-label-input:focus {
+  border-color: var(--accent);
+}
+.canvas-colors--inline {
+  position: static;
+  transform: none;
+}

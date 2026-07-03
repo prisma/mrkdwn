@@ -21,6 +21,7 @@ import {
   newCanvasId,
   nextZ,
   type CanvasData,
+  type CanvasEdge,
   type CanvasNode,
   type NodeSide,
   type SpecNode,
@@ -118,7 +119,8 @@ export function CanvasEditor(p: CanvasEditorProps) {
     (id: string) => {
       mutate(c => {
         const n = c.nodes[id];
-        if (n && n.z !== nextZ(c) - 1) n.z = nextZ(c);
+        // frames stay behind their contents — never bump them above
+        if (n && n.type !== "group" && n.z !== nextZ(c) - 1) n.z = nextZ(c);
       });
     },
     [mutate]
@@ -194,7 +196,7 @@ export function CanvasEditor(p: CanvasEditorProps) {
       addNode({ id, type: "text", text: "", shape, ...centered(200, shape === "rectangle" ? 120 : 160) });
       setEditing(id);
     } else if (t === "section") {
-      addNode({ id, type: "group", label: "Section", ...centered(520, 380) });
+      addNode({ id, type: "group", label: "Frame", ...centered(520, 380) });
     } else if (t === "page") {
       const first = p.pages.find(pg => pg.kind === "markdown" && pg.id !== p.currentPageId) ?? p.pages[0];
       if (!first) return;
@@ -361,9 +363,17 @@ export function CanvasEditor(p: CanvasEditorProps) {
   }, [p.pages, p.readOnly, mutate]);
 
   const nodes = useMemo(
-    () => Object.values(canvas.nodes).sort((a, b) => (a.z ?? 0) - (b.z ?? 0) || a.id.localeCompare(b.id)),
+    () =>
+      Object.values(canvas.nodes).sort(
+        (a, b) =>
+          // frames render under everything else, whatever their z says
+          (a.type === "group" ? 0 : 1) - (b.type === "group" ? 0 : 1) ||
+          (a.z ?? 0) - (b.z ?? 0) ||
+          a.id.localeCompare(b.id)
+      ),
     [canvas.nodes]
   );
+  const selectedEdge = selected ? canvas.edges[selected] : undefined;
   const focusedNode = focused ? canvas.nodes[focused.id] : undefined;
 
   return (
@@ -402,9 +412,11 @@ export function CanvasEditor(p: CanvasEditorProps) {
               onFocus={el => focusNode(node.id, el)}
               onNewPage={() => void newPageForNode(node.id)}
               mutate={mutate}
+              getCanvas={() => canvasRef.current}
               startEdge={startEdge}
             />
           ))}
+          {selectedEdge && !p.readOnly && <EdgeControls edge={selectedEdge} canvas={canvas} mutate={mutate} />}
         </div>
 
         {!p.readOnly && (
@@ -433,7 +445,7 @@ export function CanvasEditor(p: CanvasEditorProps) {
                 </div>
               )}
             </div>
-            <ToolButton active={tool === "section"} title="Section (group)" onClick={() => { setTool("section"); setShapeMenu(false); }}>
+            <ToolButton active={tool === "section"} title="Frame — moves its contents with it" onClick={() => { setTool("section"); setShapeMenu(false); }}>
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" strokeDasharray="4 3"><rect x="3" y="3" width="18" height="18" rx="3" /></svg>
             </ToolButton>
             <ToolButton active={tool === "page"} title="Embed a page from this workspace" onClick={() => { setTool("page"); setShapeMenu(false); }}>
@@ -546,38 +558,47 @@ interface NodeViewProps {
   onFocus(el: HTMLElement): void;
   onNewPage(): void;
   mutate(fn: (c: CanvasData) => void): void;
+  getCanvas(): CanvasData;
   startEdge(nodeId: string, side: NodeSide, e: React.PointerEvent): void;
 }
+
+type ResizeCorner = "nw" | "ne" | "sw" | "se";
+const MIN_W = 60;
+const MIN_H = 40;
 
 function NodeView(p: NodeViewProps) {
   const { node } = p;
   const rootRef = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ px: number; py: number; x: number; y: number; moved: boolean } | null>(null);
-  const resize = useRef<{ px: number; py: number; w: number; h: number } | null>(null);
-
-  const commitPos = (x: number, y: number) =>
-    p.mutate(c => {
-      const n = c.nodes[node.id];
-      if (n) {
-        n.x = Math.round(x);
-        n.y = Math.round(y);
-      }
-    });
-  const commitSize = (w: number, h: number) =>
-    p.mutate(c => {
-      const n = c.nodes[node.id];
-      if (n) {
-        n.width = Math.max(60, Math.round(w));
-        n.height = Math.max(40, Math.round(h));
-      }
-    });
+  const drag = useRef<{
+    px: number;
+    py: number;
+    x: number;
+    y: number;
+    moved: boolean;
+    /** frames carry their contents: nodes inside at drag start + positions */
+    contained: { id: string; x: number; y: number }[];
+  } | null>(null);
+  const resize = useRef<{ corner: ResizeCorner; px: number; py: number; x: number; y: number; w: number; h: number } | null>(null);
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (p.readOnly || p.editing) return;
     if ((e.target as HTMLElement).closest(".canvas-anchor, .canvas-resize, a, select, textarea, input, button")) return;
     e.stopPropagation();
     p.onSelect();
-    drag.current = { px: e.clientX, py: e.clientY, x: node.x, y: node.y, moved: false };
+    let contained: { id: string; x: number; y: number }[] = [];
+    if (node.type === "group") {
+      contained = Object.values(p.getCanvas().nodes)
+        .filter(
+          n =>
+            n.id !== node.id &&
+            n.x + n.width / 2 >= node.x &&
+            n.x + n.width / 2 <= node.x + node.width &&
+            n.y + n.height / 2 >= node.y &&
+            n.y + n.height / 2 <= node.y + node.height
+        )
+        .map(n => ({ id: n.id, x: n.x, y: n.y }));
+    }
+    drag.current = { px: e.clientX, py: e.clientY, x: node.x, y: node.y, moved: false, contained };
     try {
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     } catch {}
@@ -588,10 +609,42 @@ function NodeView(p: NodeViewProps) {
       const dx = (e.clientX - d.px) / p.scale;
       const dy = (e.clientY - d.py) / p.scale;
       if (Math.abs(dx) + Math.abs(dy) > 1) d.moved = true;
-      if (d.moved) commitPos(d.x + dx, d.y + dy);
+      if (!d.moved) return;
+      p.mutate(c => {
+        const n = c.nodes[node.id];
+        if (n) {
+          n.x = Math.round(d.x + dx);
+          n.y = Math.round(d.y + dy);
+        }
+        for (const child of d.contained) {
+          const cn = c.nodes[child.id];
+          if (cn) {
+            cn.x = Math.round(child.x + dx);
+            cn.y = Math.round(child.y + dy);
+          }
+        }
+      });
     } else if (resize.current) {
       const r = resize.current;
-      commitSize(r.w + (e.clientX - r.px) / p.scale, r.h + (e.clientY - r.py) / p.scale);
+      const dx = (e.clientX - r.px) / p.scale;
+      const dy = (e.clientY - r.py) / p.scale;
+      let x = r.x;
+      let y = r.y;
+      let w = r.corner.includes("e") ? r.w + dx : r.w - dx;
+      let h = r.corner.includes("s") ? r.h + dy : r.h - dy;
+      w = Math.max(MIN_W, w);
+      h = Math.max(MIN_H, h);
+      if (r.corner.includes("w")) x = r.x + (r.w - w);
+      if (r.corner.includes("n")) y = r.y + (r.h - h);
+      p.mutate(c => {
+        const n = c.nodes[node.id];
+        if (n) {
+          n.x = Math.round(x);
+          n.y = Math.round(y);
+          n.width = Math.round(w);
+          n.height = Math.round(h);
+        }
+      });
     }
   };
   const onPointerUp = () => {
@@ -599,15 +652,27 @@ function NodeView(p: NodeViewProps) {
     resize.current = null;
   };
 
+  const startResize = (corner: ResizeCorner) => (e: React.PointerEvent) => {
+    e.stopPropagation();
+    resize.current = { corner, px: e.clientX, py: e.clientY, x: node.x, y: node.y, w: node.width, h: node.height };
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
+  };
+
   const preset = node.color ? CANVAS_PRESETS[node.color] : undefined;
   const shape = node.type === "text" ? node.shape : undefined;
+  const isFrame = node.type === "group";
   const style: React.CSSProperties = {
     left: node.x,
     top: node.y,
     width: node.width,
     height: node.height,
-    ...(preset && shape !== "diamond" ? { background: preset.bg, borderColor: preset.fg } : {}),
-    ...(node.color?.startsWith("#") && shape !== "diamond" ? { background: `${node.color}22`, borderColor: node.color } : {}),
+    ...(preset && shape !== "diamond" && !isFrame ? { background: preset.bg, borderColor: preset.fg } : {}),
+    ...(node.color?.startsWith("#") && shape !== "diamond" && !isFrame ? { background: `${node.color}22`, borderColor: node.color } : {}),
+    // frames tint muted and translucent so contents stay readable
+    ...(isFrame && preset ? { background: `${preset.bg}73`, borderColor: `${preset.fg}66` } : {}),
+    ...(isFrame && node.color?.startsWith("#") ? { background: `${node.color}14`, borderColor: `${node.color}55` } : {}),
     ...(shape === "ellipse" ? { borderRadius: "50%" } : {}),
     ...(shape === "diamond" ? { background: "transparent", border: "none", boxShadow: "none" } : {}),
   };
@@ -647,19 +712,26 @@ function NodeView(p: NodeViewProps) {
       <NodeContent {...p} />
       {p.selected && !p.readOnly && (
         <>
-          <div
-            className="canvas-resize"
-            onPointerDown={e => {
-              e.stopPropagation();
-              resize.current = { px: e.clientX, py: e.clientY, w: node.width, h: node.height };
-              try {
-                (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-              } catch {}
-            }}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
+          {(["nw", "ne", "sw", "se"] as ResizeCorner[]).map(corner => (
+            <div
+              key={corner}
+              className={`canvas-resize canvas-resize--${corner}`}
+              onPointerDown={startResize(corner)}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+            />
+          ))}
+          <ColorDots
+            value={node.color}
+            onPick={color =>
+              p.mutate(cv => {
+                const n = cv.nodes[node.id];
+                if (!n) return;
+                if (color === undefined) delete (n as { color?: string }).color;
+                else n.color = color;
+              })
+            }
           />
-          <ColorDots node={node} mutate={p.mutate} />
         </>
       )}
       {showAnchors &&
@@ -791,14 +863,15 @@ function NodeContent(p: NodeViewProps) {
     );
   }
 
-  // group / section
+  // group / frame
+  const framePreset = node.color ? CANVAS_PRESETS[node.color] : undefined;
   if (p.editing) {
     return (
       <CommitField
         multiline={false}
         className="canvas-node-edit canvas-group-edit"
         initial={node.label ?? ""}
-        placeholder="Section name"
+        placeholder="Frame name"
         onCommit={label => {
           p.mutate(c => {
             const n = c.nodes[node.id];
@@ -809,7 +882,11 @@ function NodeContent(p: NodeViewProps) {
       />
     );
   }
-  return <div className="canvas-group-label">{node.label ?? ""}</div>;
+  return (
+    <div className="canvas-group-label" style={framePreset ? { color: framePreset.fg } : undefined}>
+      {node.label ?? ""}
+    </div>
+  );
 }
 
 /** A live view of another workspace page — just another Automerge handle. */
@@ -819,22 +896,16 @@ function MarkdownEmbed(p: { automergeUrl: string }) {
   return <div className="canvas-md canvas-md--embed" dangerouslySetInnerHTML={{ __html: renderMarkdown(doc.content) }} />;
 }
 
-function ColorDots(p: { node: CanvasNode; mutate(fn: (c: CanvasData) => void): void }) {
+/** The six preset swatches; picking the active one clears back to default. */
+function ColorDots(p: { value: string | undefined; onPick(color: string | undefined): void; inline?: boolean }) {
   return (
-    <div className="canvas-colors" onPointerDown={e => e.stopPropagation()}>
+    <div className={"canvas-colors" + (p.inline ? " canvas-colors--inline" : "")} onPointerDown={e => e.stopPropagation()}>
       {Object.entries(CANVAS_PRESETS).map(([key, c]) => (
         <button
           key={key}
-          className={"canvas-color" + (p.node.color === key ? " canvas-color--on" : "")}
+          className={"canvas-color" + (p.value === key ? " canvas-color--on" : "")}
           style={{ background: c.bg, borderColor: c.fg }}
-          onClick={() =>
-            p.mutate(cv => {
-              const n = cv.nodes[p.node.id];
-              if (!n) return;
-              if (n.color === key) delete (n as { color?: string }).color;
-              else n.color = key;
-            })
-          }
+          onClick={() => p.onPick(p.value === key ? undefined : key)}
         />
       ))}
     </div>
@@ -1005,6 +1076,52 @@ function PageEditor(p: { handle: DocHandle<MrkdwnDoc>; pages: PageMeta[]; onNavi
 
 // ---------- edges ----------
 
+/** Floating controls at the selected edge's midpoint: label + color. */
+function EdgeControls(p: { edge: CanvasEdge; canvas: CanvasData; mutate(fn: (c: CanvasData) => void): void }) {
+  const from = p.canvas.nodes[p.edge.fromNode];
+  const to = p.canvas.nodes[p.edge.toNode];
+  if (!from || !to) return null;
+  const sides = defaultSides(from, to);
+  const a = anchorPoint(from, p.edge.fromSide ?? sides.fromSide);
+  const b = anchorPoint(to, p.edge.toSide ?? sides.toSide);
+  return (
+    <div
+      className="canvas-edge-controls"
+      style={{ left: (a.x + b.x) / 2, top: (a.y + b.y) / 2 }}
+      onPointerDown={e => e.stopPropagation()}
+    >
+      <input
+        className="canvas-edge-label-input"
+        placeholder="Label"
+        autoFocus
+        value={p.edge.label ?? ""}
+        onChange={e => {
+          const label = e.target.value;
+          p.mutate(c => {
+            const edge = c.edges[p.edge.id];
+            if (!edge) return;
+            if (label) edge.label = label;
+            else delete edge.label;
+          });
+        }}
+        onKeyDown={e => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+      />
+      <ColorDots
+        inline
+        value={p.edge.color}
+        onPick={color =>
+          p.mutate(c => {
+            const edge = c.edges[p.edge.id];
+            if (!edge) return;
+            if (color === undefined) delete edge.color;
+            else edge.color = color;
+          })
+        }
+      />
+    </div>
+  );
+}
+
 function anchorPoint(node: CanvasNode, side: NodeSide): { x: number; y: number } {
   switch (side) {
     case "top":
@@ -1090,7 +1207,7 @@ function EdgeLayer(p: {
               markerEnd={(edge.toEnd ?? "arrow") === "arrow" ? "url(#canvas-arrow)" : undefined}
               markerStart={edge.fromEnd === "arrow" ? "url(#canvas-arrow)" : undefined}
             />
-            {edge.label && (
+            {edge.label && p.selected !== edge.id && (
               <text className="canvas-edge-label" x={(a.x + b.x) / 2} y={(a.y + b.y) / 2 - 8} textAnchor="middle">
                 {edge.label}
               </text>
