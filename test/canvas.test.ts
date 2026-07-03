@@ -39,6 +39,17 @@ describe("parseSpecCanvas", () => {
     expect(spec.nodes[0]!.x).toBe(11);
   });
 
+  test("passes the shape and pageId extensions through", () => {
+    const spec = parseSpecCanvas({
+      nodes: [
+        { id: "s", type: "text", text: "hi", shape: "ellipse", x: 0, y: 0, width: 100, height: 100 },
+        { id: "f", type: "file", file: "notes.md", pageId: "abc123def4", x: 0, y: 0, width: 100, height: 100 },
+      ],
+    });
+    expect((spec.nodes[0] as { shape?: string }).shape).toBe("ellipse");
+    expect((spec.nodes[1] as { pageId?: string }).pageId).toBe("abc123def4");
+  });
+
   test("rejects bad node types, duplicate ids, dangling edges, bad colors", () => {
     expect(() => parseSpecCanvas({ nodes: [{ id: "a", type: "video", x: 0, y: 0, width: 1, height: 1 }] })).toThrow(/type/);
     expect(() => parseSpecCanvas({ nodes: [note("a"), note("a")] })).toThrow(/duplicate/);

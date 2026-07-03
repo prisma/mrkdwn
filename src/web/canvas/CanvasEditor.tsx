@@ -12,6 +12,7 @@
  * - text commits are unmount-safe: clicking away never loses input
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import * as A from "@automerge/automerge";
 import type { DocHandle } from "@automerge/automerge-repo/slim";
 import { useDocument, useRepo } from "@automerge/automerge-repo-react-hooks";
 import type { MrkdwnDoc, PageMeta } from "../../shared/types";
@@ -66,7 +67,7 @@ export function CanvasEditor(p: CanvasEditorProps) {
   const [shapeMenu, setShapeMenu] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
-  const [focused, setFocused] = useState<{ id: string; fromRect: DOMRect } | null>(null);
+  const [focused, setFocused] = useState<{ id: string; fromRect: DOMRect; selectTitle?: boolean } | null>(null);
   const [hovered, setHovered] = useState<string | null>(null);
   const [edgeDraft, setEdgeDraft] = useState<{ from: string; side: NodeSide; x: number; y: number; targetId: string | null } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -197,7 +198,7 @@ export function CanvasEditor(p: CanvasEditorProps) {
     } else if (t === "page") {
       const first = p.pages.find(pg => pg.kind === "markdown" && pg.id !== p.currentPageId) ?? p.pages[0];
       if (!first) return;
-      addNode({ id, type: "file", file: `${first.slug}.md`, ...centered(EMBED_W, EMBED_H) });
+      addNode({ id, type: "file", file: `${first.slug}.md`, pageId: first.id, ...centered(EMBED_W, EMBED_H) });
     } else if (t === "link") {
       addNode({ id, type: "link", url: "", ...centered(NOTE_W, 80) });
       setEditing(id);
@@ -307,10 +308,57 @@ export function CanvasEditor(p: CanvasEditorProps) {
     addNode({ id: newCanvasId(), type: "file", file: up.url, x: Math.round(at.x - w / 2), y: Math.round(at.y - h / 2), width: w, height: h });
   };
 
-  const focusNode = (id: string, el: HTMLElement) => {
+  const focusNode = (id: string, el: HTMLElement, selectTitle = false) => {
     setEditing(null);
-    setFocused({ id, fromRect: el.getBoundingClientRect() });
+    setFocused({ id, fromRect: el.getBoundingClientRect(), selectTitle });
   };
+
+  /** "＋ New page…" in an embed: create it, point the node at it, and open
+   * the expanded editor right away with the title selected for renaming. */
+  const newPageForNode = useCallback(
+    async (nodeId: string) => {
+      const created = await p.onCreatePage("Untitled");
+      if (!created) return;
+      mutate(c => {
+        const n = c.nodes[nodeId];
+        if (n && n.type === "file") {
+          n.file = `${created.slug}.md`;
+          n.pageId = created.id;
+        }
+      });
+      setTimeout(() => {
+        const el = document.querySelector(`[data-node-id="${nodeId}"]`) as HTMLElement | null;
+        if (el) focusNode(nodeId, el, true);
+      }, 50);
+    },
+    [p.onCreatePage, mutate]
+  );
+
+  // renames re-derive slugs server-side; heal file references via pageId
+  // (and backfill pageId on legacy nodes while their slug still resolves)
+  useEffect(() => {
+    if (p.readOnly) return;
+    const fixes: { nodeId: string; file?: string; pageId?: string }[] = [];
+    for (const node of Object.values(canvasRef.current.nodes)) {
+      if (node.type !== "file" || node.file.startsWith("/api/images/")) continue;
+      if (node.pageId) {
+        const page = p.pages.find(pg => pg.id === node.pageId);
+        if (page && node.file !== `${page.slug}.md`) fixes.push({ nodeId: node.id, file: `${page.slug}.md` });
+      } else {
+        const page = p.pages.find(pg => pg.slug === node.file.replace(/\.md$/, ""));
+        if (page) fixes.push({ nodeId: node.id, pageId: page.id });
+      }
+    }
+    if (fixes.length === 0) return;
+    mutate(c => {
+      for (const fix of fixes) {
+        const n = c.nodes[fix.nodeId];
+        if (!n || n.type !== "file") continue;
+        if (fix.file) n.file = fix.file;
+        if (fix.pageId) n.pageId = fix.pageId;
+      }
+    });
+  }, [p.pages, p.readOnly, mutate]);
 
   const nodes = useMemo(
     () => Object.values(canvas.nodes).sort((a, b) => (a.z ?? 0) - (b.z ?? 0) || a.id.localeCompare(b.id)),
@@ -352,7 +400,7 @@ export function CanvasEditor(p: CanvasEditorProps) {
               onEdit={() => setEditing(node.id)}
               onDoneEditing={() => setEditing(null)}
               onFocus={el => focusNode(node.id, el)}
-              onCreatePage={p.onCreatePage}
+              onNewPage={() => void newPageForNode(node.id)}
               mutate={mutate}
               startEdge={startEdge}
             />
@@ -413,6 +461,7 @@ export function CanvasEditor(p: CanvasEditorProps) {
           key={focused.id}
           node={focusedNode}
           fromRect={focused.fromRect}
+          selectTitle={focused.selectTitle ?? false}
           pages={p.pages}
           readOnly={p.readOnly}
           onNavigate={p.onNavigate}
@@ -495,7 +544,7 @@ interface NodeViewProps {
   onEdit(): void;
   onDoneEditing(): void;
   onFocus(el: HTMLElement): void;
-  onCreatePage(title?: string): Promise<PageMeta | null>;
+  onNewPage(): void;
   mutate(fn: (c: CanvasData) => void): void;
   startEdge(nodeId: string, side: NodeSide, e: React.PointerEvent): void;
 }
@@ -667,7 +716,7 @@ function NodeContent(p: NodeViewProps) {
       return <img className="canvas-img" src={`${node.file}?w=${Math.min(1280, node.width * 2)}`} alt="" draggable={false} />;
     }
     const slug = node.file.replace(/\.md$/, "");
-    const page = p.pages.find(pg => pg.slug === slug);
+    const page = p.pages.find(pg => pg.id === node.pageId) ?? p.pages.find(pg => pg.slug === slug);
     return (
       <div className="canvas-embed">
         <div className="canvas-embed-head">
@@ -678,17 +727,20 @@ function NodeContent(p: NodeViewProps) {
           {p.selected && !p.readOnly && (
             <select
               className="canvas-embed-pick"
-              value={slug}
-              onChange={async e => {
-                let targetSlug = e.target.value;
+              value={page?.slug ?? slug}
+              onChange={e => {
+                const targetSlug = e.target.value;
                 if (targetSlug === "__new__") {
-                  const created = await p.onCreatePage("Untitled");
-                  if (!created) return;
-                  targetSlug = created.slug;
+                  p.onNewPage();
+                  return;
                 }
+                const target = p.pages.find(pg => pg.slug === targetSlug);
                 p.mutate(c => {
                   const n = c.nodes[node.id];
-                  if (n && n.type === "file") n.file = `${targetSlug}.md`;
+                  if (n && n.type === "file") {
+                    n.file = `${targetSlug}.md`;
+                    if (target) n.pageId = target.id;
+                  }
                 });
               }}
             >
@@ -796,12 +848,14 @@ function ColorDots(p: { node: CanvasNode; mutate(fn: (c: CanvasData) => void): v
 function FocusOverlay(p: {
   node: CanvasNode;
   fromRect: DOMRect;
+  selectTitle: boolean;
   pages: PageMeta[];
   readOnly: boolean;
   onNavigate(id: string): void;
   mutate(fn: (c: CanvasData) => void): void;
   onClose(): void;
 }) {
+  const repo = useRepo();
   const [expanded, setExpanded] = useState(false);
   const [closing, setClosing] = useState(false);
   useEffect(() => {
@@ -827,10 +881,26 @@ function FocusOverlay(p: {
   }, [close]);
 
   const { node } = p;
-  const page = node.type === "file" && !node.file.startsWith("/api/images/")
-    ? p.pages.find(pg => pg.slug === node.file.replace(/\.md$/, ""))
-    : undefined;
-  const title = page ? page.title || "Untitled" : node.type === "file" ? node.file : "";
+  const page =
+    node.type === "file" && !node.file.startsWith("/api/images/")
+      ? (p.pages.find(pg => pg.id === node.pageId) ?? p.pages.find(pg => pg.slug === node.file.replace(/\.md$/, "")))
+      : undefined;
+
+  // one handle resolution for both the editable title and the editor body
+  const [handle, setHandle] = useState<DocHandle<MrkdwnDoc> | null>(null);
+  useEffect(() => {
+    if (!page) return;
+    let dead = false;
+    void repo
+      .find<MrkdwnDoc>(page.automergeUrl as never)
+      .then(h => {
+        if (!dead) setHandle(h);
+      })
+      .catch(() => {});
+    return () => {
+      dead = true;
+    };
+  }, [repo, page?.automergeUrl]);
 
   const style: React.CSSProperties = expanded
     ? { left: "50%", top: "56px", transform: "translateX(-50%)", width: "min(1080px, 94vw)", height: "calc(100vh - 112px)" }
@@ -840,10 +910,14 @@ function FocusOverlay(p: {
     <div className={"focus-backdrop" + (expanded && !closing ? " focus-backdrop--on" : "")} onPointerDown={e => e.target === e.currentTarget && close()}>
       <div className="focus-panel" style={style}>
         <div className="focus-head">
-          <span className="focus-title">
-            {title}
-            {page && <span className="sidebar-page-ext">.md</span>}
-          </span>
+          {page && handle ? (
+            <span className="focus-title focus-title--edit">
+              <FocusTitle handle={handle} selectOnMount={p.selectTitle && expanded} readOnly={p.readOnly} />
+              <span className="sidebar-page-ext">.md</span>
+            </span>
+          ) : (
+            <span className="focus-title">{page ? page.title || "Untitled" : node.type === "file" ? node.file : ""}</span>
+          )}
           {page && (
             <button className="linkbtn" onClick={() => p.onNavigate(page.id)}>
               Open page ↗
@@ -855,10 +929,10 @@ function FocusOverlay(p: {
         </div>
         <div className="focus-body">
           {expanded && !closing &&
-            (page ? (
-              <PageEditor page={page} pages={p.pages} onNavigate={p.onNavigate} />
+            (page && handle ? (
+              <PageEditor handle={handle} pages={p.pages} onNavigate={p.onNavigate} />
             ) : (
-              <div className="canvas-node-placeholder">page not found</div>
+              <div className="canvas-node-placeholder">{page ? "loading…" : "page not found"}</div>
             ))}
         </div>
       </div>
@@ -866,35 +940,51 @@ function FocusOverlay(p: {
   );
 }
 
-/** The real markdown editor, mounted on the embedded page's own doc handle —
- * full edit mode: live preview, tables, presence, everything. */
-function PageEditor(p: { page: PageMeta; pages: PageMeta[]; onNavigate(id: string): void }) {
-  const repo = useRepo();
-  const [handle, setHandle] = useState<DocHandle<MrkdwnDoc> | null>(null);
+/** The embedded page's title, editable in place — the same doc field the
+ * page's own title bar edits, so the registry re-derives the slug and every
+ * embed heals via pageId. */
+function FocusTitle(p: { handle: DocHandle<MrkdwnDoc>; selectOnMount: boolean; readOnly: boolean }) {
+  const [doc, changeDoc] = useDocument<MrkdwnDoc>(p.handle.url, { suspense: false });
+  const ref = useRef<HTMLInputElement>(null);
+  const selectedOnce = useRef(false);
 
   useEffect(() => {
-    let dead = false;
-    void repo
-      .find<MrkdwnDoc>(p.page.automergeUrl as never)
-      .then(h => {
-        if (!dead) setHandle(h);
-      })
-      .catch(() => {});
-    return () => {
-      dead = true;
-    };
-  }, [repo, p.page.automergeUrl]);
+    if (p.selectOnMount && doc && ref.current && !selectedOnce.current) {
+      selectedOnce.current = true;
+      ref.current.focus();
+      ref.current.select();
+    }
+  }, [p.selectOnMount, doc]);
 
-  const presence = useMemo(() => (handle ? new PresenceStore(handle, loadIdentity()) : null), [handle]);
-  useEffect(() => () => presence?.dispose(), [presence]);
+  return (
+    <input
+      ref={ref}
+      className="focus-title-input"
+      value={doc?.title ?? ""}
+      placeholder="Untitled"
+      disabled={p.readOnly}
+      onChange={e =>
+        changeDoc(d => {
+          A.updateText(d, ["title"], e.target.value);
+        })
+      }
+      onKeyDown={e => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+    />
+  );
+}
+
+/** The real markdown editor, mounted on the embedded page's own doc handle —
+ * full edit mode: live preview, tables, presence, everything. */
+function PageEditor(p: { handle: DocHandle<MrkdwnDoc>; pages: PageMeta[]; onNavigate(id: string): void }) {
+  const presence = useMemo(() => new PresenceStore(p.handle, loadIdentity()), [p.handle]);
+  useEffect(() => () => presence.dispose(), [presence]);
 
   const pageLinks = useMemo(() => new Map(p.pages.map(pg => [pg.slug, pg.id])), [p.pages]);
 
-  if (!handle || !presence) return <div className="canvas-node-placeholder">loading…</div>;
   return (
     <div className="focus-editor">
       <Editor
-        handle={handle}
+        handle={p.handle}
         presence={presence}
         onSelectComment={() => {}}
         onSelection={() => {}}

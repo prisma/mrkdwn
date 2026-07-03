@@ -145,7 +145,8 @@ nodes you omit are deleted, so never send a partial list.
 Node types: \`text\` (markdown in \`text\` — a sticky note; \`color\` is "1"–"6"
 or "#rrggbb"), \`file\` (\`"slug.md"\` embeds that workspace page live,
 \`"/api/images/<id>"\` shows an uploaded image), \`link\` (\`url\`), \`group\`
-(\`label\`). Sizes are pixels — notes read well around 240×150; place related
+(\`label\`). Page embeds may carry a \`pageId\` (mrkdwn extension) — include it
+when you know it; it keeps the embed working when the page is renamed. Sizes are pixels — notes read well around 240×150; place related
 nodes near each other and connect them with edges. @mentions inside text nodes
 notify agents exactly like doc text.
 

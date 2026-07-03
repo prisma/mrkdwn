@@ -35,7 +35,9 @@ export type NodeShape = "rectangle" | "ellipse" | "diamond";
 export type CanvasNode = NodeBase &
   (
     | { type: "text"; text: string; shape?: NodeShape }
-    | { type: "file"; file: string; subpath?: string }
+    /** `pageId` is an mrkdwn extension: page embeds keep working across
+     * renames (the slug in `file` is re-derived from the title) */
+    | { type: "file"; file: string; subpath?: string; pageId?: string }
     | { type: "link"; url: string }
     | { type: "group"; label?: string; background?: string; backgroundStyle?: "cover" | "ratio" | "repeat" }
   );
@@ -164,6 +166,7 @@ export function parseSpecCanvas(input: unknown): SpecCanvas {
           type: "file",
           file: str(n.file, `node ${id}: file`),
           ...(typeof n.subpath === "string" && n.subpath.startsWith("#") ? { subpath: n.subpath } : {}),
+          ...(typeof n.pageId === "string" && n.pageId.length > 0 ? { pageId: n.pageId } : {}),
         });
         break;
       case "link":

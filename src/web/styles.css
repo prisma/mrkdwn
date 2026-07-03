@@ -2466,3 +2466,32 @@ body.blk-grabbing * {
   padding: 9px 12px;
   font-size: 14px;
 }
+
+/* editable page title in the focus header */
+.focus-title--edit {
+  display: flex;
+  align-items: baseline;
+  gap: 2px;
+}
+.focus-title-input {
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  padding: 2px 4px;
+  margin: -2px 0 -2px -4px;
+  border-radius: 6px;
+  min-width: 60px;
+  width: 100%;
+  max-width: 480px;
+}
+.focus-title-input:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.focus-title-input:focus {
+  background: var(--bg);
+  box-shadow: 0 0 0 1.5px var(--accent);
+}
