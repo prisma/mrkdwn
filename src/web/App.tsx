@@ -17,6 +17,7 @@ import { Sidebar } from "./components/Sidebar";
 import { CommandPalette } from "./components/CommandPalette";
 import { CommentsPanel, type DraftComment, type PositionedComment } from "./components/CommentsPanel";
 import { CanvasEditor } from "./canvas/CanvasEditor";
+import { HtmlView } from "./components/HtmlView";
 import { InviteAgentModal } from "./components/InviteAgentModal";
 import { SelectionToolbar } from "./components/SelectionToolbar";
 import type { PageMeta } from "../shared/types";
@@ -31,7 +32,7 @@ interface AppProps {
   /** create without navigating (the `/page` inline-link flow) */
   onCreatePage(title?: string): Promise<PageMeta | null>;
   /** create, open, and land in the (selected) title */
-  onCreateAndOpenPage(title?: string, kind?: "markdown" | "canvas"): Promise<PageMeta | null>;
+  onCreateAndOpenPage(title?: string, kind?: "markdown" | "canvas" | "html"): Promise<PageMeta | null>;
   /** this page was just created — focus + select its title on mount */
   focusTitle: boolean;
   onFocusTitleConsumed(): void;
@@ -411,9 +412,14 @@ export function App(props: AppProps) {
           onNavigate={props.onNavigate}
           onCreatePage={() => void props.onCreateAndOpenPage()}
           onCreateCanvas={() => void props.onCreateAndOpenPage(undefined, "canvas")}
+          onCreateHtml={() => void props.onCreateAndOpenPage(undefined, "html")}
         />
-        <main className={"doc-main" + (pageKind === "canvas" ? " doc-main--canvas" : "")}>
-          <div className={pageKind === "canvas" ? "canvas-column" : "doc-column"}>
+        <main
+          className={
+            "doc-main" + (pageKind === "canvas" ? " doc-main--canvas" : pageKind === "html" ? " doc-main--html" : "")
+          }
+        >
+          <div className={pageKind === "canvas" ? "canvas-column" : pageKind === "html" ? "html-column" : "doc-column"}>
             <input
               ref={titleRef}
               className="title-input"
@@ -441,6 +447,8 @@ export function App(props: AppProps) {
                 onCreatePage={props.onCreatePage}
                 readOnly={!connected}
               />
+            ) : pageKind === "html" ? (
+              <HtmlView handle={handle} />
             ) : (
             <div className="editor-wrap">
               <Editor

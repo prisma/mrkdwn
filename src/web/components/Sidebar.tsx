@@ -8,6 +8,11 @@ interface SidebarProps {
   onNavigate(id: string): void;
   onCreatePage(): void;
   onCreateCanvas(): void;
+  onCreateHtml(): void;
+}
+
+export function pageExt(kind: PageMeta["kind"]): string {
+  return kind === "canvas" ? "canvas" : kind === "html" ? "html" : "md";
 }
 
 /** Collapsible page navigation with client-side title filtering. */
@@ -31,13 +36,18 @@ export function Sidebar(p: SidebarProps) {
               key={page.id}
               className={"sidebar-page" + (page.id === p.currentPageId ? " sidebar-page--active" : "")}
               onClick={() => p.onNavigate(page.id)}
-              title={`${page.title || "Untitled"}.${page.kind === "canvas" ? "canvas" : "md"}`}
+              title={`${page.title || "Untitled"}.${pageExt(page.kind)}`}
             >
               {page.kind === "canvas" ? (
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <rect x="3" y="3" width="8" height="8" rx="1.5" />
                   <rect x="13" y="13" width="8" height="8" rx="1.5" />
                   <path d="M11 7h4m-8 8v-4" />
+                </svg>
+              ) : page.kind === "html" ? (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="16 18 22 12 16 6" />
+                  <polyline points="8 6 2 12 8 18" />
                 </svg>
               ) : (
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -47,7 +57,7 @@ export function Sidebar(p: SidebarProps) {
               )}
               <span className="sidebar-page-title">
                 {page.title || "Untitled"}
-                <span className="sidebar-page-ext">.{page.kind === "canvas" ? "canvas" : "md"}</span>
+                <span className="sidebar-page-ext">.{pageExt(page.kind)}</span>
               </span>
             </button>
           ))}
@@ -58,6 +68,9 @@ export function Sidebar(p: SidebarProps) {
         </button>
         <button className="sidebar-new" onClick={p.onCreateCanvas}>
           <span className="sidebar-new-plus">+</span> New canvas
+        </button>
+        <button className="sidebar-new" onClick={p.onCreateHtml}>
+          <span className="sidebar-new-plus">+</span> New HTML page
         </button>
       </div>
     </nav>

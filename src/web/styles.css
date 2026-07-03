@@ -2555,3 +2555,67 @@ body.blk-grabbing * {
   position: static;
   transform: none;
 }
+
+/* html pages: agent-written documents rendered in a sandboxed iframe.
+ * Like canvases, the view owns the viewport — the declared size always
+ * fits (scaled down when needed), nothing scrolls. */
+.doc-main--html {
+  overflow: hidden;
+  height: calc(100vh - 49px);
+}
+.html-column {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 28px 0;
+  box-sizing: border-box;
+}
+.html-column .title-input {
+  flex-shrink: 0;
+  margin-bottom: 10px;
+}
+.html-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 0 0 18px;
+}
+.html-view--chromeless {
+  height: 100%;
+  padding: 0;
+}
+.html-frame-box {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  background: #fff;
+}
+.html-frame {
+  display: block;
+  border: none;
+  background: #fff;
+  transform-origin: top left;
+}
+.html-view-meta {
+  font-size: 12px;
+  color: var(--text-faint);
+}
+.canvas-html-embed {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: #fff;
+}
+.canvas-html-embed .html-frame {
+  position: absolute;
+  /* scaled + centered inline; inert so canvas drags stay canvas drags */
+  pointer-events: none;
+}

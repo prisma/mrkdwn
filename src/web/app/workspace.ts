@@ -39,7 +39,7 @@ export function useWorkspace(intervalMs = 5000) {
   return { workspace, refresh };
 }
 
-export async function createPageRequest(title?: string, kind?: "markdown" | "canvas"): Promise<PageMeta | null> {
+export async function createPageRequest(title?: string, kind?: "markdown" | "canvas" | "html"): Promise<PageMeta | null> {
   try {
     const res = await fetch("/api/pages", {
       method: "POST",

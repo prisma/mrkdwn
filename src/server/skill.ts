@@ -10,7 +10,7 @@ export interface InvitePage {
   title: string;
   /** e.g. /public/2e3884382c-notion-mode */
   path: string;
-  kind: "markdown" | "canvas";
+  kind: "markdown" | "canvas" | "html";
 }
 
 export function buildSnippet(config: ServerConfig, page: InvitePage): string {
@@ -38,7 +38,15 @@ ${
   Read canvas:  GET  ${base}/api/doc${pq}          → { kind: "canvas", canvas: { nodes, edges } }
   Edit canvas:  PUT  ${base}/api/doc${pq}          {"canvas": {"nodes": [...], "edges": [...]}}
                 (full replace, merged per node — send back what you read, changed)`
-    : `  Read page:    GET  ${base}/api/doc${pq}
+    : page.kind === "html"
+      ? `  This page is an HTML PAGE — you write a full HTML document (markup + CSS + JS),
+  humans see it rendered live in a sandboxed iframe:
+  Read source:  GET  ${base}/api/doc${pq}          → { kind: "html", html, size }
+  Replace:      PUT  ${base}/api/doc${pq}          {"html": "<!doctype html>..."}
+  Surgical:     POST ${base}/api/doc/edits${pq}    {"edits":[{"oldText":"exact text","newText":"replacement"}]}
+  REQUIRED: declare the render size in <head>: <meta name="mrkdwn-size" content="960x600">
+  (min 240x160, max 1600x1200 — a PUT without it is rejected)`
+      : `  Read page:    GET  ${base}/api/doc${pq}
   Edit:         POST ${base}/api/doc/edits${pq}    {"edits":[{"oldText":"exact text","newText":"replacement"}]}
   Append:       POST ${base}/api/doc/append${pq}   {"markdown":"## New section\\n..."}`
 }
@@ -101,11 +109,19 @@ delivers any @mentions of your handle written before you joined.
 
 ## Pages (the workspace)
 
-Documents live in a workspace; each page has a fixed \`id\` and a title-derived \`slug\`.
+Documents live in a workspace; each page has a fixed \`id\`, a title-derived
+\`slug\`, and one of three kinds:
+
+- **markdown** (default) — collaborative text; edit with surgical text edits.
+- **canvas** — a JSON Canvas board of nodes and edges; edit as JSON.
+- **html** — a full HTML document you author; humans view it rendered live
+  in a sandboxed iframe.
 
 \`\`\`bash
-mk $MRKDWN_URL/api/workspace               # { workspace, pages: [{ id, title, slug, path }] }
-mk -X POST $MRKDWN_URL/api/pages -d '{"title": "Meeting notes"}'   # create a page
+mk $MRKDWN_URL/api/workspace               # { workspace, pages: [{ id, title, slug, kind, path }] }
+mk -X POST $MRKDWN_URL/api/pages -d '{"title": "Meeting notes"}'                    # markdown
+mk -X POST $MRKDWN_URL/api/pages -d '{"title": "Launch board", "kind": "canvas"}'   # canvas
+mk -X POST $MRKDWN_URL/api/pages -d '{"title": "Burndown", "kind": "html"}'         # html
 \`\`\`
 
 Every doc/comment endpoint below targets the **first page by default**; add
@@ -143,12 +159,43 @@ concurrent human edits (someone dragging a note mid-request loses nothing);
 nodes you omit are deleted, so never send a partial list.
 
 Node types: \`text\` (markdown in \`text\` — a sticky note; \`color\` is "1"–"6"
-or "#rrggbb"), \`file\` (\`"slug.md"\` embeds that workspace page live,
-\`"/api/images/<id>"\` shows an uploaded image), \`link\` (\`url\`), \`group\`
-(\`label\`). Page embeds may carry a \`pageId\` (mrkdwn extension) — include it
-when you know it; it keeps the embed working when the page is renamed. Sizes are pixels — notes read well around 240×150; place related
-nodes near each other and connect them with edges. @mentions inside text nodes
-notify agents exactly like doc text.
+or "#rrggbb"), \`file\` (\`"slug.md"\` embeds that markdown page live,
+\`"slug.html"\` embeds an html page rendered live, \`"/api/images/<id>"\` shows
+an uploaded image), \`link\` (\`url\`), \`group\` (\`label\`). Page embeds may
+carry a \`pageId\` (mrkdwn extension) — include it when you know it; it keeps
+the embed working when the page is renamed. Sizes are pixels — notes read
+well around 240×150; place related nodes near each other and connect them
+with edges. @mentions inside text nodes notify agents exactly like doc text.
+
+## HTML pages
+
+An **html** page is a complete HTML document you author — markup, CSS, and
+JS in one file. Humans don't edit it; they watch it render live in a
+sandboxed iframe (scripts run, but in an opaque origin: no cookies, no
+storage, no app credentials). Use them for dashboards, visualizations,
+interactive widgets, prototypes.
+
+**The document must declare its render size** with a meta tag in \`<head>\`
+(CSS pixels, min 240x160, max 1600x1200) — writes without it are rejected:
+
+\`\`\`html
+<meta name="mrkdwn-size" content="960x600">
+\`\`\`
+
+\`\`\`bash
+mk "$MRKDWN_URL/api/doc?page=<id>"                  # → { kind: "html", html, size }
+mk "$MRKDWN_URL/api/doc?page=<id>&format=html"      # raw source only
+mk -X PUT "$MRKDWN_URL/api/doc?page=<id>" -d '{
+  "html": "<!doctype html><html><head><meta charset=\\"utf-8\\"><meta name=\\"mrkdwn-size\\" content=\\"960x600\\"><style>body{font-family:system-ui}</style></head><body><h1>Live</h1><script>/* js runs */</script></body></html>"
+}'
+\`\`\`
+
+Surgical edits work exactly like markdown (the source is text under the same
+CRDT), so prefer them for small changes — \`POST /api/doc/edits\` with
+oldText/newText; the edit is rejected if it would break the size declaration.
+\`append\` doesn't apply to html pages. Humans see your update the moment you
+write it — send complete, valid documents rather than streaming fragments.
+An html page can be embedded on a canvas as a \`file\` node (\`"slug.html"\`).
 
 ## Reading a document
 

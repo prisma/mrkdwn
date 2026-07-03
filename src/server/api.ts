@@ -13,6 +13,7 @@ import type { DocHost, PageEntry } from "./repo";
 import type { PersistWorker } from "./persist";
 import { enqueue, singleSpliceDiff, typeSplices, type TypedSplice } from "./typewriter";
 import { CanvasValidationError, canvasToSpec, emptyCanvas, parseSpecCanvas, reconcileCanvas } from "../shared/canvas";
+import { HTML_MAX, HTML_MIN, HTML_SIZE_TAG_EXAMPLE, htmlRenderSize, parseHtmlSize, withinHtmlLimits } from "../shared/html";
 import { isValidHandle, normalizeHandle, type NotificationCenter } from "./notifications";
 import { colorFor } from "../shared/identity";
 import {
@@ -149,7 +150,7 @@ export function pageMeta(ctx: ApiContext, entry: PageEntry): PageMeta {
     id: entry.record.id,
     title: entry.record.title,
     slug: entry.record.slug,
-    kind: entry.record.kind === "canvas" ? "canvas" : "markdown",
+    kind: entry.record.kind ?? "markdown",
     path: ctx.host.pagePath(entry),
     automergeUrl: entry.record.automergeUrl,
     updatedAt: entry.record.updatedAt,
@@ -166,9 +167,9 @@ function getWorkspace(ctx: ApiContext): Response {
 
 async function postPage(ctx: ApiContext, data: Record<string, unknown>): Promise<Response> {
   const title = typeof data.title === "string" && data.title.trim() ? data.title.trim() : "Untitled";
-  if (data.kind !== undefined && data.kind !== "markdown" && data.kind !== "canvas")
-    throw new ApiError(400, `kind must be "markdown" or "canvas"`);
-  const entry = await ctx.host.createPage(title, data.kind === "canvas" ? "canvas" : undefined);
+  if (data.kind !== undefined && data.kind !== "markdown" && data.kind !== "canvas" && data.kind !== "html")
+    throw new ApiError(400, `kind must be "markdown", "canvas", or "html"`);
+  const entry = await ctx.host.createPage(title, data.kind === "canvas" || data.kind === "html" ? data.kind : undefined);
   return json({ ok: true, page: pageMeta(ctx, entry) }, 201);
 }
 
@@ -191,7 +192,9 @@ function docPayload(ctx: ApiContext, entry: PageEntry) {
     title: doc.title,
     ...(meta.kind === "canvas"
       ? { kind: "canvas" as const, canvas: canvasToSpec(doc.canvas) }
-      : { markdown: doc.content }),
+      : meta.kind === "html"
+        ? { kind: "html" as const, html: doc.content, size: htmlRenderSize(doc.content) }
+        : { markdown: doc.content }),
     heads: A.getHeads(doc),
     automergeUrl: entry.handle.url,
     page: meta,
@@ -201,11 +204,19 @@ function docPayload(ctx: ApiContext, entry: PageEntry) {
 }
 
 function getDoc(ctx: ApiContext, page: PageEntry, url: URL): Response {
-  if (url.searchParams.get("format") === "markdown") {
-    if (page.record.kind === "canvas")
+  const format = url.searchParams.get("format");
+  if (format === "markdown" || format === "html") {
+    const kind = page.record.kind ?? "markdown";
+    if (kind === "canvas")
       throw new ApiError(400, "this page is a canvas — GET /api/doc (no format param) returns its JSON Canvas data");
+    if (format === "markdown" && kind === "html")
+      throw new ApiError(400, "this page is html — use ?format=html for the raw source");
+    if (format === "html" && kind === "markdown")
+      throw new ApiError(400, "this page is markdown — use ?format=markdown for the raw source");
+    // html source is served as text/plain on purpose: rendering user HTML on
+    // the app origin would let a crafted page run scripts with app access
     return new Response(page.handle.doc().content, {
-      headers: { "content-type": "text/markdown; charset=utf-8" },
+      headers: { "content-type": `text/${format === "html" ? "plain" : "markdown"}; charset=utf-8` },
     });
   }
   return json(docPayload(ctx, page));
@@ -217,16 +228,51 @@ async function putDoc(
   data: Record<string, unknown>,
   agent: string | null
 ): Promise<Response> {
-  const { markdown, title, canvas } = data;
-  const isCanvas = page.record.kind === "canvas";
-  if (markdown === undefined && title === undefined && canvas === undefined)
-    throw new ApiError(400, isCanvas ? "send { canvas } and/or { title }" : "send { markdown } and/or { title }");
+  const { markdown, title, canvas, html } = data;
+  const kind = page.record.kind ?? "markdown";
+  const bodyHint =
+    kind === "canvas" ? "send { canvas } and/or { title }" : kind === "html" ? "send { html } and/or { title }" : "send { markdown } and/or { title }";
+  if (markdown === undefined && title === undefined && canvas === undefined && html === undefined)
+    throw new ApiError(400, bodyHint);
   if (markdown !== undefined && typeof markdown !== "string") throw new ApiError(400, "markdown must be a string");
+  if (html !== undefined && typeof html !== "string") throw new ApiError(400, "html must be a string");
   if (title !== undefined && typeof title !== "string") throw new ApiError(400, "title must be a string");
-  if (markdown !== undefined && isCanvas)
-    throw new ApiError(400, "this page is a canvas — PUT { canvas: { nodes, edges } } (JSON Canvas 1.0) instead of markdown");
-  if (canvas !== undefined && !isCanvas)
-    throw new ApiError(400, "this page is markdown — send { markdown }, or create a canvas page via POST /api/pages { kind: \"canvas\" }");
+  if (markdown !== undefined && kind !== "markdown")
+    throw new ApiError(
+      400,
+      kind === "canvas"
+        ? "this page is a canvas — PUT { canvas: { nodes, edges } } (JSON Canvas 1.0) instead of markdown"
+        : "this page is html — PUT { html: \"<!doctype html>...\" } instead of markdown"
+    );
+  if (canvas !== undefined && kind !== "canvas")
+    throw new ApiError(400, `this page is ${kind} — ${bodyHint}, or create a canvas page via POST /api/pages { kind: "canvas" }`);
+  if (html !== undefined && kind !== "html")
+    throw new ApiError(400, `this page is ${kind} — ${bodyHint}, or create an html page via POST /api/pages { kind: "html" }`);
+
+  if (html !== undefined) {
+    const declared = parseHtmlSize(html);
+    if (!declared)
+      throw new ApiError(
+        400,
+        `html pages must declare their render size — include ${HTML_SIZE_TAG_EXAMPLE} in <head> ` +
+          `(min ${HTML_MIN.width}x${HTML_MIN.height}, max ${HTML_MAX.width}x${HTML_MAX.height})`
+      );
+    if (!withinHtmlLimits(declared))
+      throw new ApiError(
+        400,
+        `declared size ${declared.width}x${declared.height} is out of range — ` +
+          `min ${HTML_MIN.width}x${HTML_MIN.height}, max ${HTML_MAX.width}x${HTML_MAX.height}`
+      );
+    return enqueue(page.handle.url, async () => {
+      page.handle.change(d => {
+        if (typeof title === "string") A.updateText(d, ["title"], title);
+        // updateText diffs old→new, so concurrent writes merge per-region;
+        // no typewriter here — humans watch the rendered iframe, not source
+        A.updateText(d, ["content"], html);
+      }, changeOptions(agent));
+      return json({ ok: true, ...docPayload(ctx, page) });
+    });
+  }
 
   if (canvas !== undefined) {
     let spec;
@@ -334,7 +380,9 @@ async function applyAsAgent(
 ): Promise<void> {
   const typing = ctx.config.agentTyping;
   const handle = page.handle;
-  if (!typing || !agent) {
+  // html pages skip the typing animation: humans watch the rendered iframe,
+  // and streaming half-written markup would just flicker broken documents
+  if (!typing || !agent || page.record.kind === "html") {
     handle.change(d => {
       for (const s of splices) A.splice(d, ["content"], s.index, s.delText.length, s.ins);
     }, changeOptions(agent));
@@ -362,7 +410,20 @@ async function postEdits(
   // plan inside the per-doc queue so a request that lands mid-animation
   // validates against the settled content, not a half-typed intermediate
   return enqueue(page.handle.url, async () => {
-    const { splices } = planEdits(page.handle.doc().content, edits as EditOp[]);
+    const { splices, finalText } = planEdits(page.handle.doc().content, edits as EditOp[]);
+    if (page.record.kind === "html") {
+      const size = parseHtmlSize(finalText);
+      if (!size)
+        throw new ApiError(
+          400,
+          `these edits would leave the page without a valid size declaration — keep ${HTML_SIZE_TAG_EXAMPLE} in <head>`
+        );
+      if (!withinHtmlLimits(size))
+        throw new ApiError(
+          400,
+          `these edits would declare ${size.width}x${size.height} — min ${HTML_MIN.width}x${HTML_MIN.height}, max ${HTML_MAX.width}x${HTML_MAX.height}`
+        );
+    }
     await applyAsAgent(ctx, page, agent, splices);
     return json({ ok: true, applied: splices.length, ...docPayload(ctx, page) });
   });
@@ -377,6 +438,8 @@ async function postAppend(
   const { markdown } = data;
   if (page.record.kind === "canvas")
     throw new ApiError(400, "this page is a canvas — GET /api/doc for its JSON, then PUT /api/doc { canvas } to edit");
+  if (page.record.kind === "html")
+    throw new ApiError(400, "append doesn't apply to html pages (it would land after </html>) — use POST /api/doc/edits or PUT { html }");
   if (typeof markdown !== "string" || markdown.length === 0) throw new ApiError(400, "send { markdown } to append");
 
   return enqueue(page.handle.url, async () => {

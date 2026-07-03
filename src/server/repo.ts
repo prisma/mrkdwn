@@ -15,6 +15,7 @@ import type { DocStore, DocumentRecord, WorkspaceRecord } from "./store";
 import type { MrkdwnDoc } from "../shared/types";
 import { newPageId, uniqueSlug } from "../shared/slug";
 import { emptyCanvas } from "../shared/canvas";
+import { starterHtml } from "../shared/html";
 import { WELCOME_DOC } from "./welcome";
 import { createObjectMirror, mirrorKey, type ObjectMirror } from "./persist";
 import type { DocumentKind } from "./store";
@@ -136,7 +137,7 @@ export async function openDocHost(
   const createEntry = async (title: string, kind?: DocumentKind, initial?: MrkdwnDoc): Promise<PageEntry> => {
     const doc: MrkdwnDoc = initial ?? {
       title,
-      content: "",
+      content: kind === "html" ? starterHtml(title) : "",
       comments: {},
       ...(kind === "canvas" ? { canvas: emptyCanvas() } : {}),
     };
@@ -146,7 +147,7 @@ export async function openDocHost(
       workspaceId: workspace.id,
       title,
       slug: uniqueSlug(title, takenSlugs()),
-      ...(kind === "canvas" ? { kind } : {}),
+      ...(kind === "canvas" || kind === "html" ? { kind } : {}),
       automergeUrl: handle.url,
     });
     const entry: PageEntry = { record, handle };

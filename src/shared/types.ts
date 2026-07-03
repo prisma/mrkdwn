@@ -101,8 +101,9 @@ export interface PageMeta {
   id: string;
   title: string;
   slug: string;
-  /** "markdown" pages edit as text; "canvas" pages are JSON Canvas boards */
-  kind: "markdown" | "canvas";
+  /** "markdown" pages edit as text; "canvas" pages are JSON Canvas boards;
+   * "html" pages render agent-written HTML in a sandboxed iframe */
+  kind: "markdown" | "canvas" | "html";
   /** `/{workspaceHandle}/{id}-{slug}` — the id does the lookup, slug is cosmetic */
   path: string;
   automergeUrl: string;

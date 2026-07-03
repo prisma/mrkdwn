@@ -81,7 +81,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
         id: entry.record.id,
         title: entry.handle.doc().title,
         path: host.pagePath(entry),
-        kind: (entry.record.kind === "canvas" ? "canvas" : "markdown") as "markdown" | "canvas",
+        kind: entry.record.kind ?? ("markdown" as const),
       };
       return new Response(buildSnippet(config, page), {
         headers: { "content-type": "text/plain; charset=utf-8" },

@@ -19,14 +19,15 @@ export interface WorkspaceRecord {
   isPublic: boolean;
 }
 
-export type DocumentKind = "markdown" | "canvas";
+export type DocumentKind = "markdown" | "canvas" | "html";
 
 export interface DocumentRecord {
   id: string;
   workspaceId: string;
   title: string;
   slug: string;
-  /** absent/"markdown" = markdown page; "canvas" = JSON Canvas board */
+  /** absent/"markdown" = markdown page; "canvas" = JSON Canvas board;
+   * "html" = agent-authored HTML rendered in a sandboxed iframe */
   kind?: DocumentKind;
   automergeUrl: string;
   /** last completed S3 write (persist worker), if any */
@@ -128,7 +129,7 @@ function rowToDoc(row: {
 }): DocumentRecord {
   return {
     ...row,
-    kind: row.kind === "canvas" ? "canvas" : undefined,
+    kind: row.kind === "canvas" || row.kind === "html" ? row.kind : undefined,
     persistedAt: row.persistedAt ? row.persistedAt.getTime() : undefined,
     createdAt: row.createdAt.getTime(),
     updatedAt: row.updatedAt.getTime(),

@@ -31,6 +31,9 @@ import { imageFromDataTransfer, uploadImage } from "../app/images";
 import { Editor } from "../editor/Editor";
 import { PresenceStore } from "../app/presence";
 import { loadIdentity } from "../app/identity";
+import { HTML_SANDBOX, htmlRenderSize } from "../../shared/html";
+import { HtmlView } from "../components/HtmlView";
+import { pageExt } from "../components/Sidebar";
 
 interface CanvasEditorProps {
   handle: DocHandle<MrkdwnDoc>;
@@ -53,6 +56,10 @@ const NOTE_W = 240;
 const NOTE_H = 150;
 const EMBED_W = 380;
 const EMBED_H = 300;
+
+/** JSON Canvas `file` value for a page embed (markdown or html). */
+const pageFileName = (pg: PageMeta) => `${pg.slug}.${pageExt(pg.kind)}`;
+const stripPageExt = (file: string) => file.replace(/\.(md|html)$/, "");
 
 export function CanvasEditor(p: CanvasEditorProps) {
   const [doc, changeDoc] = useDocument<MrkdwnDoc>(p.handle.url, { suspense: false });
@@ -198,9 +205,9 @@ export function CanvasEditor(p: CanvasEditorProps) {
     } else if (t === "section") {
       addNode({ id, type: "group", label: "Frame", ...centered(520, 380) });
     } else if (t === "page") {
-      const first = p.pages.find(pg => pg.kind === "markdown" && pg.id !== p.currentPageId) ?? p.pages[0];
+      const first = p.pages.find(pg => pg.kind !== "canvas" && pg.id !== p.currentPageId) ?? p.pages[0];
       if (!first) return;
-      addNode({ id, type: "file", file: `${first.slug}.md`, pageId: first.id, ...centered(EMBED_W, EMBED_H) });
+      addNode({ id, type: "file", file: pageFileName(first), pageId: first.id, ...centered(EMBED_W, EMBED_H) });
     } else if (t === "link") {
       addNode({ id, type: "link", url: "", ...centered(NOTE_W, 80) });
       setEditing(id);
@@ -324,7 +331,7 @@ export function CanvasEditor(p: CanvasEditorProps) {
       mutate(c => {
         const n = c.nodes[nodeId];
         if (n && n.type === "file") {
-          n.file = `${created.slug}.md`;
+          n.file = pageFileName(created);
           n.pageId = created.id;
         }
       });
@@ -345,9 +352,9 @@ export function CanvasEditor(p: CanvasEditorProps) {
       if (node.type !== "file" || node.file.startsWith("/api/images/")) continue;
       if (node.pageId) {
         const page = p.pages.find(pg => pg.id === node.pageId);
-        if (page && node.file !== `${page.slug}.md`) fixes.push({ nodeId: node.id, file: `${page.slug}.md` });
+        if (page && node.file !== pageFileName(page)) fixes.push({ nodeId: node.id, file: pageFileName(page) });
       } else {
-        const page = p.pages.find(pg => pg.slug === node.file.replace(/\.md$/, ""));
+        const page = p.pages.find(pg => pg.slug === stripPageExt(node.file));
         if (page) fixes.push({ nodeId: node.id, pageId: page.id });
       }
     }
@@ -790,14 +797,14 @@ function NodeContent(p: NodeViewProps) {
     if (node.file.startsWith("/api/images/")) {
       return <img className="canvas-img" src={`${node.file}?w=${Math.min(1280, node.width * 2)}`} alt="" draggable={false} />;
     }
-    const slug = node.file.replace(/\.md$/, "");
+    const slug = stripPageExt(node.file);
     const page = p.pages.find(pg => pg.id === node.pageId) ?? p.pages.find(pg => pg.slug === slug);
     return (
       <div className="canvas-embed">
         <div className="canvas-embed-head">
           <span className="canvas-embed-title">
             {page ? page.title || "Untitled" : slug}
-            <span className="sidebar-page-ext">.md</span>
+            <span className="sidebar-page-ext">.{page ? pageExt(page.kind) : "md"}</span>
           </span>
           {p.selected && !p.readOnly && (
             <select
@@ -813,24 +820,32 @@ function NodeContent(p: NodeViewProps) {
                 p.mutate(c => {
                   const n = c.nodes[node.id];
                   if (n && n.type === "file") {
-                    n.file = `${targetSlug}.md`;
+                    n.file = target ? pageFileName(target) : `${targetSlug}.md`;
                     if (target) n.pageId = target.id;
                   }
                 });
               }}
             >
               {p.pages
-                .filter(pg => pg.kind === "markdown")
+                .filter(pg => pg.kind !== "canvas")
                 .map(pg => (
                   <option key={pg.id} value={pg.slug}>
-                    {pg.title || "Untitled"}
+                    {pg.title || "Untitled"}.{pageExt(pg.kind)}
                   </option>
                 ))}
               <option value="__new__">＋ New page…</option>
             </select>
           )}
         </div>
-        {page ? <MarkdownEmbed automergeUrl={page.automergeUrl} /> : <div className="canvas-node-placeholder">page “{slug}” not found</div>}
+        {page ? (
+          page.kind === "html" ? (
+            <HtmlEmbed automergeUrl={page.automergeUrl} width={node.width} height={node.height} />
+          ) : (
+            <MarkdownEmbed automergeUrl={page.automergeUrl} />
+          )
+        ) : (
+          <div className="canvas-node-placeholder">page “{slug}” not found</div>
+        )}
       </div>
     );
   }
@@ -899,6 +914,40 @@ function MarkdownEmbed(p: { automergeUrl: string }) {
   return <div className="canvas-md canvas-md--embed" dangerouslySetInnerHTML={{ __html: renderMarkdown(doc.content) }} />;
 }
 
+/** An html page on the canvas: the live document rendered at its declared
+ * size, scaled to fit the node and inert (interact via the expanded view). */
+function HtmlEmbed(p: { automergeUrl: string; width: number; height: number }) {
+  const [doc] = useDocument<MrkdwnDoc>(p.automergeUrl as never, { suspense: false });
+  const html = doc?.content ?? "";
+  const [srcdoc, setSrcdoc] = useState(html);
+  useEffect(() => {
+    const t = setTimeout(() => setSrcdoc(html), 300);
+    return () => clearTimeout(t);
+  }, [html]);
+  if (!doc) return <div className="canvas-node-placeholder">loading…</div>;
+  const size = htmlRenderSize(srcdoc);
+  const availW = p.width - 2; // node borders
+  const availH = p.height - 37; // embed header
+  const scale = Math.min(availW / size.width, availH / size.height);
+  return (
+    <div className="canvas-html-embed">
+      <iframe
+        className="html-frame"
+        sandbox={HTML_SANDBOX}
+        srcDoc={srcdoc}
+        title={doc.title || "HTML page"}
+        style={{
+          width: size.width,
+          height: size.height,
+          transform: `scale(${scale})`,
+          left: Math.max(0, (availW - size.width * scale) / 2),
+          top: Math.max(0, (availH - size.height * scale) / 2),
+        }}
+      />
+    </div>
+  );
+}
+
 /** The six preset swatches; picking the active one clears back to default. */
 function ColorDots(p: { value: string | undefined; onPick(color: string | undefined): void; inline?: boolean }) {
   return (
@@ -957,7 +1006,7 @@ function FocusOverlay(p: {
   const { node } = p;
   const page =
     node.type === "file" && !node.file.startsWith("/api/images/")
-      ? (p.pages.find(pg => pg.id === node.pageId) ?? p.pages.find(pg => pg.slug === node.file.replace(/\.md$/, "")))
+      ? (p.pages.find(pg => pg.id === node.pageId) ?? p.pages.find(pg => pg.slug === stripPageExt(node.file)))
       : undefined;
 
   // one handle resolution for both the editable title and the editor body
@@ -987,7 +1036,7 @@ function FocusOverlay(p: {
           {page && handle ? (
             <span className="focus-title focus-title--edit">
               <FocusTitle handle={handle} selectOnMount={p.selectTitle && expanded} readOnly={p.readOnly} />
-              <span className="sidebar-page-ext">.md</span>
+              <span className="sidebar-page-ext">.{pageExt(page.kind)}</span>
             </span>
           ) : (
             <span className="focus-title">{page ? page.title || "Untitled" : node.type === "file" ? node.file : ""}</span>
@@ -1004,7 +1053,12 @@ function FocusOverlay(p: {
         <div className="focus-body">
           {expanded && !closing &&
             (page && handle ? (
-              <PageEditor handle={handle} pages={p.pages} onNavigate={p.onNavigate} />
+              page.kind === "html" ? (
+                // interactive here (no pointer-events lock like the canvas tile)
+                <HtmlView handle={handle} chromeless />
+              ) : (
+                <PageEditor handle={handle} pages={p.pages} onNavigate={p.onNavigate} />
+              )
             ) : (
               <div className="canvas-node-placeholder">{page ? "loading…" : "page not found"}</div>
             ))}

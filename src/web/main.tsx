@@ -77,7 +77,7 @@ function Root({ repo, adapter }: { repo: Repo; adapter: WebSocketClientAdapter }
   }, []);
 
   const createPage = useCallback(
-    async (title?: string, kind?: "markdown" | "canvas") => {
+    async (title?: string, kind?: "markdown" | "canvas" | "html") => {
       const created = await createPageRequest(title, kind);
       if (created) {
         await refresh();
@@ -96,7 +96,7 @@ function Root({ repo, adapter }: { repo: Repo; adapter: WebSocketClientAdapter }
   // create → open → title focused & selected, so typing renames immediately
   const [freshPageId, setFreshPageId] = useState<string | null>(null);
   const createAndOpenPage = useCallback(
-    async (title?: string, kind?: "markdown" | "canvas") => {
+    async (title?: string, kind?: "markdown" | "canvas" | "html") => {
       const created = await createPage(title, kind);
       if (created) {
         setFreshPageId(created.id);
