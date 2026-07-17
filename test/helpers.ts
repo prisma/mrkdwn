@@ -28,6 +28,8 @@ export async function makeWorld(opts: { mirror?: import("../src/server/persist")
   delete config.s3;
   // instant agent edits — the typewriter has its own tests
   delete config.agentTyping;
+  // never let tests talk to a real Kimi API (.env may carry KIMI_API_KEY)
+  delete config.kimi;
   const running = await startServer({ config, mirror: opts.mirror });
   const base = `http://localhost:${running.server.port}`;
   const clients: Repo[] = [];
