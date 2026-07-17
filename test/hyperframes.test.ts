@@ -222,6 +222,9 @@ describe("hyperframes pages", () => {
         body: JSON.stringify({ message: "hi" }),
       });
       expect(res.status).toBe(404);
+      // unknown job ids 404 with a self-explanatory message
+      const job = await fetch(`${w.base}/api/kimi/job?id=kj_nope`);
+      expect(job.status).toBe(404);
       // and status reports the feature off
       const status = (await (await fetch(`${w.base}/api/status`)).json()) as { kimi: boolean; previewOrigin: string };
       expect(status.kimi).toBe(false);

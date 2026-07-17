@@ -17,23 +17,13 @@ import { planEdits, type EditOp } from "./edits";
 import { enqueue } from "./typewriter";
 import { listProjectFiles, readProjectFile, writeProjectFile } from "./hyperframes";
 import { colorFor } from "../shared/identity";
-import type { PresenceMessage } from "../shared/types";
+import { nowId, type PresenceMessage } from "../shared/types";
 
 const KIMI_HANDLE = "kimi";
 const KIMI_NAME = "Kimi K3";
 const MAX_ITERATIONS = 16;
 const MAX_CONCURRENT = 2;
 const READ_CAP = 120_000; // chars per read_file result
-
-let active = 0;
-
-export interface KimiChatResult {
-  ok: true;
-  reply: string;
-  /** file-touching actions, for the UI activity line */
-  actions: { tool: string; path?: string }[];
-  iterations: number;
-}
 
 interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -106,11 +96,44 @@ Working style:
 - When done, reply with a short plain-text summary of what you changed and why.`;
 }
 
-export async function handleKimiChat(
+// ---------- jobs ----------
+// The tool loop routinely outlives the platform edge's ~60s request window
+// (model latency + 429 backoffs), so a chat request only STARTS a job and
+// returns immediately; the panel polls /api/kimi/job with short waits. Jobs
+// live in memory — mrkdwn is a single stateful process, and a lost job on
+// redeploy only loses the chat bubble, never the edits (those are in the doc).
+
+export interface KimiJob {
+  id: string;
+  pageId: string;
+  status: "running" | "done" | "error";
+  reply?: string;
+  error?: string;
+  actions: { tool: string; path?: string }[];
+  iterations: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+const jobs = new Map<string, KimiJob>();
+const JOB_TTL_MS = 15 * 60_000;
+const JOB_POLL_MAX_WAIT_S = 25; // long-poll cap — stay far under the edge timeout
+
+function pruneJobs(): void {
+  const now = Date.now();
+  for (const [id, job] of jobs) {
+    if (job.status !== "running" && now - job.updatedAt > JOB_TTL_MS) jobs.delete(id);
+  }
+}
+
+const runningJobs = () => [...jobs.values()].filter(j => j.status === "running").length;
+
+/** POST /api/kimi/chat — validate, start the job, return 202 immediately. */
+export function handleKimiChat(
   deps: { kimi?: KimiConfig; notifications: NotificationCenter },
   page: PageEntry,
   data: Record<string, unknown>
-): Promise<Response> {
+): Response {
   const kimi = deps.kimi;
   if (!kimi) throw new ApiError(404, "the integrated Kimi agent is not configured on this server");
   if (page.record.kind !== "hyperframes")
@@ -118,9 +141,65 @@ export async function handleKimiChat(
   const message = data.message;
   if (typeof message !== "string" || !message.trim()) throw new ApiError(400, 'send { "message": "..." }');
   const history = Array.isArray(data.history) ? (data.history as { role: string; content: string }[]) : [];
-  if (active >= MAX_CONCURRENT) throw new ApiError(429, "Kimi is busy — try again in a moment");
+  pruneJobs();
+  if (runningJobs() >= MAX_CONCURRENT) throw new ApiError(429, "Kimi is busy — try again in a moment");
 
-  active++;
+  const job: KimiJob = {
+    id: nowId("kj"),
+    pageId: page.record.id,
+    status: "running",
+    actions: [],
+    iterations: 0,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  jobs.set(job.id, job);
+  // fire and forget — runJob never throws
+  void runJob(deps, kimi, page, job, message.trim(), history);
+  return Response.json({ ok: true, job: jobView(job) }, { status: 202 });
+}
+
+/** GET /api/kimi/job?id=…&wait=… — poll a job; `wait` long-polls (seconds,
+ * capped) until the job leaves "running" so the panel gets updates fast
+ * without hammering. */
+export async function handleKimiJob(url: URL): Promise<Response> {
+  const id = url.searchParams.get("id");
+  if (!id) throw new ApiError(400, "pass ?id=<job id> from the chat response");
+  const job = jobs.get(id);
+  if (!job)
+    throw new ApiError(
+      404,
+      "no such Kimi job — it may have expired or the server restarted (any edits it made are already in the document)"
+    );
+  const waitS = Math.min(Math.max(0, Number(url.searchParams.get("wait") ?? 0) || 0), JOB_POLL_MAX_WAIT_S);
+  const deadline = Date.now() + waitS * 1000;
+  const actionsSeen = Number(url.searchParams.get("actions") ?? -1);
+  // return early on progress too, not just completion — live action chips
+  while (job.status === "running" && job.actions.length === actionsSeen && Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 300));
+  }
+  return Response.json({ ok: true, job: jobView(job) });
+}
+
+function jobView(job: KimiJob) {
+  return {
+    id: job.id,
+    status: job.status,
+    ...(job.reply !== undefined ? { reply: job.reply } : {}),
+    ...(job.error !== undefined ? { error: job.error } : {}),
+    actions: job.actions,
+    iterations: job.iterations,
+  };
+}
+
+async function runJob(
+  deps: { notifications: NotificationCenter },
+  kimi: KimiConfig,
+  page: PageEntry,
+  job: KimiJob,
+  message: string,
+  history: { role: string; content: string }[]
+): Promise<void> {
   try {
     deps.notifications.markSeen(KIMI_HANDLE, KIMI_NAME);
     broadcastKimiPresence(page, true);
@@ -133,30 +212,33 @@ export async function handleKimiChat(
         .map(m => ({ role: m.role as "user" | "assistant", content: m.content })),
       { role: "user", content: message },
     ];
-    const actions: KimiChatResult["actions"] = [];
 
     for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
+      job.iterations = iteration;
+      job.updatedAt = Date.now();
       const reply = await callKimi(kimi, messages);
       messages.push(reply);
       const calls = reply.tool_calls ?? [];
       if (calls.length === 0) {
-        broadcastKimiPresence(page, false);
-        const result: KimiChatResult = {
-          ok: true,
-          reply: reply.content?.trim() || "(done)",
-          actions,
-          iterations: iteration,
-        };
-        return Response.json(result);
+        job.reply = reply.content?.trim() || "(done)";
+        job.status = "done";
+        job.updatedAt = Date.now();
+        return;
       }
       for (const call of calls) {
-        const output = await runTool(page, call, actions);
+        const output = await runTool(page, call, job.actions);
+        job.updatedAt = Date.now();
         messages.push({ role: "tool", content: output, tool_call_id: call.id });
       }
     }
-    throw new ApiError(502, "Kimi did not settle within the tool-call budget — try a narrower ask");
+    job.error = "Kimi did not settle within the tool-call budget — try a narrower ask";
+    job.status = "error";
+  } catch (e) {
+    job.error = e instanceof ApiError ? e.message : "Kimi run failed unexpectedly";
+    job.status = "error";
+    if (!(e instanceof ApiError)) console.error("[mrkdwn] kimi job failed:", e);
   } finally {
-    active--;
+    job.updatedAt = Date.now();
     broadcastKimiPresence(page, false);
   }
 }
@@ -194,7 +276,7 @@ async function callKimi(kimi: KimiConfig, messages: ChatMessage[]): Promise<Chat
   }
 }
 
-async function runTool(page: PageEntry, call: ToolCall, actions: KimiChatResult["actions"]): Promise<string> {
+async function runTool(page: PageEntry, call: ToolCall, actions: KimiJob["actions"]): Promise<string> {
   let args: Record<string, unknown>;
   try {
     args = JSON.parse(call.function.arguments || "{}") as Record<string, unknown>;

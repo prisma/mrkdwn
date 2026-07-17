@@ -150,16 +150,45 @@ interface KimiTurn {
   error?: boolean;
 }
 
+interface KimiJobPayload {
+  id: string;
+  status: "running" | "done" | "error";
+  reply?: string;
+  error?: string;
+  actions?: KimiTurn["actions"];
+}
+
+/** Parse a response that SHOULD be JSON but may be an HTML error page from
+ * an intermediary (edge timeouts, 502 pages). Never throws. */
+async function parseJson<T>(res: Response): Promise<T | null> {
+  try {
+    const text = await res.text();
+    return JSON.parse(text) as T;
+  } catch {
+    return null;
+  }
+}
+
 function KimiPanel(p: { pageId: string; disabled: boolean }) {
   const [turns, setTurns] = useState<KimiTurn[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [busyActions, setBusyActions] = useState<KimiTurn["actions"]>([]);
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
-  }, [turns, busy]);
+  }, [turns, busy, busyActions]);
 
+  const finish = (turn: KimiTurn) => {
+    setTurns(t => [...t, turn]);
+    setBusyActions([]);
+    setBusy(false);
+  };
+
+  /** The tool loop outlives the platform's ~60s request window, so chat only
+   * starts a job; we then poll with short long-poll requests. Transient poll
+   * failures (redeploys, blips) retry a few times before giving up. */
   const send = async () => {
     const message = input.trim();
     if (!message || busy) return;
@@ -167,22 +196,72 @@ function KimiPanel(p: { pageId: string; disabled: boolean }) {
     const history = turns.filter(t => !t.error).map(t => ({ role: t.role, content: t.content }));
     setTurns(t => [...t, { role: "user", content: message }]);
     setBusy(true);
+    setBusyActions([]);
     try {
-      const res = await fetch(`/api/kimi/chat?page=${p.pageId}`, {
+      const started = await fetch(`/api/kimi/chat?page=${p.pageId}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ message, history }),
       });
-      const data = (await res.json()) as { reply?: string; actions?: KimiTurn["actions"]; error?: string };
-      if (!res.ok || !data.reply) {
-        setTurns(t => [...t, { role: "assistant", content: data.error ?? "Kimi request failed", error: true }]);
-      } else {
-        setTurns(t => [...t, { role: "assistant", content: data.reply!, actions: data.actions }]);
+      const startData = await parseJson<{ job?: KimiJobPayload; error?: string }>(started);
+      const jobId = startData?.job?.id;
+      if (!started.ok || !jobId) {
+        finish({
+          role: "assistant",
+          content: startData?.error ?? `Kimi request failed (${started.status})`,
+          error: true,
+        });
+        return;
+      }
+
+      let failures = 0;
+      let seenActions = 0;
+      for (;;) {
+        let job: KimiJobPayload | undefined;
+        try {
+          const res = await fetch(`/api/kimi/job?id=${jobId}&wait=20&actions=${seenActions}`);
+          const data = await parseJson<{ job?: KimiJobPayload; error?: string }>(res);
+          if (res.status === 404) {
+            finish({
+              role: "assistant",
+              content: data?.error ?? "Kimi's session was interrupted — any edits it made are already in the project.",
+              error: true,
+            });
+            return;
+          }
+          if (res.ok && data?.job) {
+            job = data.job;
+            failures = 0;
+          }
+        } catch {
+          // network blip — fall through to the retry counter
+        }
+        if (!job) {
+          failures++;
+          if (failures >= 4) {
+            finish({
+              role: "assistant",
+              content: "Lost contact with the server while Kimi was working — its edits still land in the project; check the preview.",
+              error: true,
+            });
+            return;
+          }
+          await new Promise(r => setTimeout(r, 2000));
+          continue;
+        }
+        seenActions = job.actions?.length ?? 0;
+        setBusyActions(job.actions ?? []);
+        if (job.status === "done") {
+          finish({ role: "assistant", content: job.reply || "(done)", actions: job.actions });
+          return;
+        }
+        if (job.status === "error") {
+          finish({ role: "assistant", content: job.error ?? "Kimi run failed", error: true, actions: job.actions });
+          return;
+        }
       }
     } catch (e) {
-      setTurns(t => [...t, { role: "assistant", content: `Kimi request failed: ${String(e)}`, error: true }]);
-    } finally {
-      setBusy(false);
+      finish({ role: "assistant", content: `Kimi request failed: ${String(e)}`, error: true });
     }
   };
 
@@ -213,7 +292,20 @@ function KimiPanel(p: { pageId: string; disabled: boolean }) {
             )}
           </div>
         ))}
-        {busy && <div className="hf-kimi-turn hf-kimi-turn--assistant"><div className="hf-kimi-bubble hf-kimi-busy">Kimi is working…</div></div>}
+        {busy && (
+          <div className="hf-kimi-turn hf-kimi-turn--assistant">
+            <div className="hf-kimi-bubble hf-kimi-busy">Kimi is working…</div>
+            {busyActions && busyActions.length > 0 && (
+              <div className="hf-kimi-actions">
+                {busyActions.map((a, j) => (
+                  <span key={j} className="hf-kimi-action">
+                    {a.tool === "write_file" ? "wrote" : "edited"} {a.path}
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
       <div className="hf-kimi-input">
         <textarea

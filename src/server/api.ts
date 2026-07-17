@@ -29,7 +29,7 @@ import {
   type HyperframesContext,
 } from "./hyperframes";
 import { hyperframesRenderSize } from "../shared/hyperframes";
-import { handleKimiChat } from "./kimi";
+import { handleKimiChat, handleKimiJob } from "./kimi";
 import { colorFor } from "../shared/identity";
 import {
   nowId,
@@ -82,13 +82,16 @@ export async function handleApi(req: Request, url: URL, ctx: ApiContext): Promis
     if (path === "/api/hyperframes/export" && method === "GET")
       return await handleHyperframesExport(resolvePage(ctx, url), hfCtx(ctx));
     // the integrated Kimi agent — invoked from the web UI (public, like page
-    // creation: v1 permissions are org-level and the token is world-visible)
+    // creation: v1 permissions are org-level and the token is world-visible).
+    // chat STARTS a job (202); the panel polls the job endpoint with short
+    // waits — the tool loop outlives the platform edge's request timeout
     if (path === "/api/kimi/chat" && method === "POST")
-      return await handleKimiChat(
+      return handleKimiChat(
         { kimi: ctx.config.kimi, notifications: ctx.notifications },
         resolvePage(ctx, url),
         await body(req)
       );
+    if (path === "/api/kimi/job" && method === "GET") return await handleKimiJob(url);
 
     requireAuth(req, url, ctx.config);
     const agent = agentHandle(req, url);
