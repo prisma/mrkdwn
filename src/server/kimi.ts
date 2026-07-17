@@ -162,25 +162,36 @@ export async function handleKimiChat(
 }
 
 async function callKimi(kimi: KimiConfig, messages: ChatMessage[]): Promise<ChatMessage> {
-  let res: Response;
-  try {
-    res = await fetch(`${kimi.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${kimi.apiKey}` },
-      body: JSON.stringify({ model: kimi.model, messages, tools: TOOLS, temperature: 0.4 }),
-      signal: AbortSignal.timeout(120_000),
-    });
-  } catch (e) {
-    throw new ApiError(502, `couldn't reach the Kimi API: ${e instanceof Error ? e.message : String(e)}`);
+  // upstream providers rate-limit in bursts — ride them out instead of
+  // bouncing an error into the chat panel
+  const backoffMs = [2_000, 5_000, 12_000];
+  for (let attempt = 0; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(`${kimi.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${kimi.apiKey}` },
+        body: JSON.stringify({ model: kimi.model, messages, tools: TOOLS, temperature: 0.4 }),
+        signal: AbortSignal.timeout(120_000),
+      });
+    } catch (e) {
+      throw new ApiError(502, `couldn't reach the Kimi API: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    if (res.ok) {
+      const payload = (await res.json()) as { choices?: { message?: ChatMessage }[] };
+      const reply = payload.choices?.[0]?.message;
+      if (!reply) throw new ApiError(502, "Kimi API returned no completion");
+      return reply;
+    }
+    const retryable = res.status === 429 || res.status >= 500;
+    const wait = backoffMs[attempt];
+    if (!retryable || wait === undefined) {
+      const detail = (await res.text().catch(() => "")).slice(0, 300);
+      throw new ApiError(502, `Kimi API error ${res.status}: ${detail}`);
+    }
+    await res.body?.cancel();
+    await new Promise(r => setTimeout(r, wait));
   }
-  if (!res.ok) {
-    const detail = (await res.text().catch(() => "")).slice(0, 300);
-    throw new ApiError(502, `Kimi API error ${res.status}: ${detail}`);
-  }
-  const payload = (await res.json()) as { choices?: { message?: ChatMessage }[] };
-  const reply = payload.choices?.[0]?.message;
-  if (!reply) throw new ApiError(502, "Kimi API returned no completion");
-  return reply;
 }
 
 async function runTool(page: PageEntry, call: ToolCall, actions: KimiChatResult["actions"]): Promise<string> {
