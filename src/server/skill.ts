@@ -10,7 +10,7 @@ export interface InvitePage {
   title: string;
   /** e.g. /public/2e3884382c-notion-mode */
   path: string;
-  kind: "markdown" | "canvas" | "html";
+  kind: "markdown" | "canvas" | "html" | "hyperframes";
 }
 
 export function buildSnippet(config: ServerConfig, page: InvitePage): string {
@@ -46,7 +46,18 @@ ${
   Surgical:     POST ${base}/api/doc/edits${pq}    {"edits":[{"oldText":"exact text","newText":"replacement"}]}
   REQUIRED: declare the render size in <head>: <meta name="mrkdwn-size" content="960x600">
   (min 240x160, max 1600x1200 — a PUT without it is rejected)`
-      : `  Read page:    GET  ${base}/api/doc${pq}
+      : page.kind === "hyperframes"
+        ? `  This page is a HYPERFRAMES VIDEO PROJECT (https://hyperframes.heygen.com) — a
+  multi-file HTML video composition; humans watch it play live in an embedded player:
+  List files:   GET  ${base}/api/hf/files${pq}
+  Read file:    GET  ${base}/api/hf/file${pq}&path=index.html
+  Edit file:    POST ${base}/api/doc/edits${pq}    {"file":"index.html","edits":[{"oldText":"exact","newText":"new"}]}
+  Write file:   PUT  ${base}/api/hf/file${pq}      {"path":"styles.css","content":"..."}
+  Fork project: POST ${base}/api/pages/fork        {"page":"${page.id}"}   (iterate on a copy)
+  Download zip: GET  ${base}/api/hyperframes/export${pq}    (render locally: npx hyperframes render)
+  Follow the HyperFrames contract: one paused GSAP timeline on window.__timelines["<id>"],
+  data-start/data-duration/data-track-index clips, sized composition root.`
+        : `  Read page:    GET  ${base}/api/doc${pq}
   Edit:         POST ${base}/api/doc/edits${pq}    {"edits":[{"oldText":"exact text","newText":"replacement"}]}
   Append:       POST ${base}/api/doc/append${pq}   {"markdown":"## New section\\n..."}`
 }
@@ -110,26 +121,39 @@ delivers any @mentions of your handle written before you joined.
 ## Pages (the workspace)
 
 Documents live in a workspace; each page has a fixed \`id\`, a title-derived
-\`slug\`, and one of three kinds:
+\`slug\`, and one of four kinds:
 
 - **markdown** (default) — collaborative text; edit with surgical text edits.
 - **canvas** — a JSON Canvas board of nodes and edges; edit as JSON.
 - **html** — a full HTML document you author; humans view it rendered live
   in a sandboxed iframe.
+- **hyperframes** — a HyperFrames video project (multi-file HTML composition,
+  https://hyperframes.heygen.com); humans watch it play in an embedded player.
 
 \`\`\`bash
 mk $MRKDWN_URL/api/workspace               # { workspace, pages: [{ id, title, slug, kind, path }] }
 mk -X POST $MRKDWN_URL/api/pages -d '{"title": "Meeting notes"}'                    # markdown
 mk -X POST $MRKDWN_URL/api/pages -d '{"title": "Launch board", "kind": "canvas"}'   # canvas
 mk -X POST $MRKDWN_URL/api/pages -d '{"title": "Burndown", "kind": "html"}'         # html
+mk -X POST $MRKDWN_URL/api/pages -d '{"title": "Promo video", "kind": "hyperframes"}'  # hyperframes
 \`\`\`
 
 Every doc/comment endpoint below targets the **first page by default**; add
 \`?page=<id>\` to work on another page. Notifications tell you which page a
 mention came from (\`page: { id, title }\`). In doc text, \`@page-slug\`
 references link to that page — and a line containing only \`![[page-slug]]\`
-**embeds** that page (any kind: markdown, canvas, or html) as a live block
-humans see rendered inside the document.
+**embeds** that page (any kind: markdown, canvas, html, or hyperframes) as a
+live block humans see rendered inside the document.
+
+**Forking.** Any page can be forked — a brand-new page initialized from the
+source's full state and history (comments and attribution included), with
+lineage recorded. Use it to explore an alternative version without touching
+the original; other pages keep referencing the original.
+
+\`\`\`bash
+mk -X POST $MRKDWN_URL/api/pages/fork -d '{"page": "<id>", "title": "Promo video (punchier cut)"}'
+# → { page: { id, path, ... }, forkedFrom: { id, title } }
+\`\`\`
 
 ## Canvas pages
 
@@ -198,6 +222,42 @@ oldText/newText; the edit is rejected if it would break the size declaration.
 \`append\` doesn't apply to html pages. Humans see your update the moment you
 write it — send complete, valid documents rather than streaming fragments.
 An html page can be embedded on a canvas as a \`file\` node (\`"slug.html"\`).
+
+## HyperFrames video pages
+
+A **hyperframes** page is a [HyperFrames](https://hyperframes.heygen.com)
+video project: a directory of files (composition html, css, js, media assets)
+rendered as video. Humans watch it **play live** in an embedded player — every
+file edit you make shows up on the next replay. Text files live in the same
+CRDT as everything else (concurrent edits to different files always merge);
+binary assets are content-addressed blobs served alongside them.
+
+\`\`\`bash
+mk "$MRKDWN_URL/api/hf/files?page=<id>"                      # { entrypoint, files: [{ path, kind, mimeType, byteSize }] }
+mk "$MRKDWN_URL/api/hf/file?page=<id>&path=index.html"       # raw file content
+mk -X POST "$MRKDWN_URL/api/doc/edits?page=<id>" -d '{
+  "file": "index.html",
+  "edits": [{ "oldText": "Hello", "newText": "Launch day" }]
+}'                                                           # surgical edit inside one file
+mk -X PUT "$MRKDWN_URL/api/hf/file?page=<id>" -d '{"path": "styles.css", "content": "/* ... */"}'
+mk -X DELETE "$MRKDWN_URL/api/hf/file?page=<id>&path=old.js"
+mk -o project.zip "$MRKDWN_URL/api/hyperframes/export?page=<id>"   # download to render locally
+\`\`\`
+
+Compositions follow the HyperFrames contract: a sized root element with
+\`data-composition-id\`/\`data-width\`/\`data-height\`/\`data-duration\`, clips
+with \`data-start\`/\`data-duration\`/\`data-track-index\`, and **one paused
+GSAP timeline** registered at \`window.__timelines["<composition-id>"]\` —
+the player drives playback and seeking. Keep animations deterministic (no
+clocks, no unseeded randomness). To create a project from scratch, upload a
+zip: \`curl -X POST --data-binary @project.zip "$MRKDWN_URL/api/hyperframes/upload?title=My video"\`
+(binaries land in object storage; \`node_modules\`/\`.git\` are dropped).
+
+The typical iteration loop humans expect: they comment or @mention you with
+feedback → you edit the project files (or **fork first** via
+\`POST /api/pages/fork\` when exploring an alternative take) → they replay the
+embedded preview and compare versions. A hyperframes page embeds in markdown
+(\`![[slug]]\`) and on canvases (file node \`"slug.hf"\`).
 
 ## Reading a document
 

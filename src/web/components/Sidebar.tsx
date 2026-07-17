@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { PageMeta } from "../../shared/types";
 import { PAGE_DRAG_MIME } from "../editor/embedExt";
 
@@ -10,10 +10,12 @@ interface SidebarProps {
   onCreatePage(): void;
   onCreateCanvas(): void;
   onCreateHtml(): void;
+  onCreateHyperframes(): void;
+  onUploadHyperframes(file: File): void;
 }
 
 export function pageExt(kind: PageMeta["kind"]): string {
-  return kind === "canvas" ? "canvas" : kind === "html" ? "html" : "md";
+  return kind === "canvas" ? "canvas" : kind === "html" ? "html" : kind === "hyperframes" ? "hf" : "md";
 }
 
 /** Collapsible page navigation with client-side title filtering. */
@@ -57,6 +59,11 @@ export function Sidebar(p: SidebarProps) {
                   <polyline points="16 18 22 12 16 6" />
                   <polyline points="8 6 2 12 8 18" />
                 </svg>
+              ) : page.kind === "hyperframes" ? (
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="4" width="20" height="16" rx="2" />
+                  <path d="m10 9 5 3-5 3z" />
+                </svg>
               ) : (
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -80,7 +87,34 @@ export function Sidebar(p: SidebarProps) {
         <button className="sidebar-new" onClick={p.onCreateHtml}>
           <span className="sidebar-new-plus">+</span> New HTML page
         </button>
+        <button className="sidebar-new" onClick={p.onCreateHyperframes}>
+          <span className="sidebar-new-plus">+</span> New video
+        </button>
+        <UploadButton onFile={p.onUploadHyperframes} />
       </div>
     </nav>
+  );
+}
+
+/** "Upload video project" — a HyperFrames project zip → new hyperframes page. */
+function UploadButton(p: { onFile(file: File): void }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  return (
+    <>
+      <button className="sidebar-new" onClick={() => inputRef.current?.click()} title="Import a HyperFrames project (.zip)">
+        <span className="sidebar-new-plus">↑</span> Upload video project
+      </button>
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".zip,application/zip"
+        style={{ display: "none" }}
+        onChange={e => {
+          const file = e.target.files?.[0];
+          if (file) p.onFile(file);
+          e.target.value = "";
+        }}
+      />
+    </>
   );
 }

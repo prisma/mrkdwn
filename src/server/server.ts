@@ -7,6 +7,7 @@ import { handleApi, broadcastAgentPresence, type ApiContext } from "./api";
 import { buildSnippet, skillMarkdown } from "./skill";
 import { createObjectMirror, startPersistence, type ObjectMirror, type PersistWorker } from "./persist";
 import { handleImages } from "./images";
+import { handlePreview } from "./hyperframes";
 import type { SyncSocketData } from "./wsbridge";
 
 export interface RunningServer {
@@ -48,7 +49,7 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
     host.onPage(entry => persistence.watch(entry));
   }
 
-  ctx = { config, host, notifications, persistence };
+  ctx = { config, host, notifications, persistence, ...(mirror ? { mirror } : {}) };
 
   async function handleRequest(req: Request, srv: Bun.Server<SyncSocketData>): Promise<Response> {
     const url = new URL(req.url);
@@ -87,6 +88,10 @@ export async function startServer(opts: StartOptions = {}): Promise<RunningServe
         headers: { "content-type": "text/plain; charset=utf-8" },
       });
     }
+
+    // hyperframes projects served as a virtual directory (+ the player shell)
+    const preview = await handlePreview(req, url, { config, host, ...(mirror ? { mirror } : {}) });
+    if (preview) return preview;
 
     // pasted images: upload + cached (optionally resized) serving
     const image = await handleImages(req, url, { store, mirror, workspaceId: host.workspace.id });

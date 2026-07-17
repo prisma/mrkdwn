@@ -11,7 +11,7 @@ import { WebSocketClientAdapter } from "@automerge/automerge-repo-network-websoc
 import { RepoContext } from "@automerge/automerge-repo-react-hooks";
 import { App } from "./App";
 import { whenPeered } from "../shared/connect";
-import { createPageRequest, parsePageId, useWorkspace } from "./app/workspace";
+import { createPageRequest, forkPageRequest, parsePageId, uploadHyperframesRequest, useWorkspace } from "./app/workspace";
 import type { MrkdwnDoc, PageMeta } from "../shared/types";
 
 function Splash({ message, error }: { message?: string; error?: string }) {
@@ -76,27 +76,33 @@ function Root({ repo, adapter }: { repo: Repo; adapter: WebSocketClientAdapter }
     setRoutePageId(id);
   }, []);
 
-  const createPage = useCallback(
-    async (title?: string, kind?: "markdown" | "canvas" | "html") => {
-      const created = await createPageRequest(title, kind);
-      if (created) {
-        await refresh();
-        // navigate(created.id) may run before the refreshed state renders —
-        // patch the ref so the new page is findable immediately
-        const ws = workspaceRef.current;
-        if (ws && !ws.pages.some(p => p.id === created.id)) {
-          workspaceRef.current = { ...ws, pages: [...ws.pages, created] };
-        }
+  /** make a freshly created page navigable before the next workspace poll */
+  const absorbPage = useCallback(
+    async (created: PageMeta) => {
+      await refresh();
+      // navigate(created.id) may run before the refreshed state renders —
+      // patch the ref so the new page is findable immediately
+      const ws = workspaceRef.current;
+      if (ws && !ws.pages.some(p => p.id === created.id)) {
+        workspaceRef.current = { ...ws, pages: [...ws.pages, created] };
       }
-      return created;
     },
     [refresh]
+  );
+
+  const createPage = useCallback(
+    async (title?: string, kind?: PageMeta["kind"]) => {
+      const created = await createPageRequest(title, kind);
+      if (created) await absorbPage(created);
+      return created;
+    },
+    [absorbPage]
   );
 
   // create → open → title focused & selected, so typing renames immediately
   const [freshPageId, setFreshPageId] = useState<string | null>(null);
   const createAndOpenPage = useCallback(
-    async (title?: string, kind?: "markdown" | "canvas" | "html") => {
+    async (title?: string, kind?: PageMeta["kind"]) => {
       const created = await createPage(title, kind);
       if (created) {
         setFreshPageId(created.id);
@@ -105,6 +111,32 @@ function Root({ repo, adapter }: { repo: Repo; adapter: WebSocketClientAdapter }
       return created;
     },
     [createPage, navigate]
+  );
+
+  const uploadHyperframes = useCallback(
+    async (file: File) => {
+      const result = await uploadHyperframesRequest(file);
+      if ("error" in result) {
+        alert(`Couldn't import the project: ${result.error}`);
+        return null;
+      }
+      await absorbPage(result.page);
+      navigate(result.page.id);
+      return result.page;
+    },
+    [absorbPage, navigate]
+  );
+
+  const forkPage = useCallback(
+    async (pageId: string) => {
+      const fork = await forkPageRequest(pageId);
+      if (!fork) return null;
+      await absorbPage(fork);
+      setFreshPageId(fork.id);
+      navigate(fork.id);
+      return fork;
+    },
+    [absorbPage, navigate]
   );
 
   const handle = page ? handles.current.get(page.id) : undefined;
@@ -121,6 +153,8 @@ function Root({ repo, adapter }: { repo: Repo; adapter: WebSocketClientAdapter }
       onNavigate={navigate}
       onCreatePage={createPage}
       onCreateAndOpenPage={createAndOpenPage}
+      onUploadHyperframes={uploadHyperframes}
+      onForkPage={forkPage}
       focusTitle={page.id === freshPageId}
       onFocusTitleConsumed={() => setFreshPageId(null)}
     />

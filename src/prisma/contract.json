@@ -37,6 +37,20 @@
                   "kind": "scalar"
                 }
               },
+              "forkedFromHeads": {
+                "nullable": true,
+                "type": {
+                  "codecId": "pg/text@1",
+                  "kind": "scalar"
+                }
+              },
+              "forkedFromId": {
+                "nullable": true,
+                "type": {
+                  "codecId": "pg/text@1",
+                  "kind": "scalar"
+                }
+              },
               "id": {
                 "nullable": false,
                 "type": {
@@ -111,6 +125,12 @@
                 },
                 "createdAt": {
                   "column": "createdAt"
+                },
+                "forkedFromHeads": {
+                  "column": "forkedFromHeads"
+                },
+                "forkedFromId": {
+                  "column": "forkedFromId"
                 },
                 "id": {
                   "column": "id"
@@ -352,6 +372,16 @@
                   "nativeType": "timestamptz",
                   "nullable": false
                 },
+                "forkedFromHeads": {
+                  "codecId": "pg/text@1",
+                  "nativeType": "text",
+                  "nullable": true
+                },
+                "forkedFromId": {
+                  "codecId": "pg/text@1",
+                  "nativeType": "text",
+                  "nullable": true
+                },
                 "id": {
                   "codecId": "pg/text@1",
                   "nativeType": "text",
@@ -545,7 +575,7 @@
         "kind": "postgres-schema"
       }
     },
-    "storageHash": "sha256:e93f7df4b304c507c2b108a9d572902cec401a1994326ad7c2203ce35ae6b5d4"
+    "storageHash": "sha256:c21873d501289dc93d7f2b89164e21e30010deaa89a9d5ebf05f23e807f975fb"
   },
   "execution": {
     "executionHash": "sha256:bdb571467056bd4774afd3edf2b922e7737813c03417153d0091d2cea7f0afc1",

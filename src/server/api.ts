@@ -9,12 +9,27 @@
  */
 import * as A from "@automerge/automerge";
 import { tokenMatches, type ServerConfig } from "./config";
+import { ApiError } from "./errors";
+import { planEdits as planEditOps, indicesOf, type EditOp } from "./edits";
 import type { DocHost, PageEntry } from "./repo";
 import type { PersistWorker } from "./persist";
 import { enqueue, singleSpliceDiff, typeSplices, type TypedSplice } from "./typewriter";
 import { CanvasValidationError, canvasToSpec, emptyCanvas, parseSpecCanvas, reconcileCanvas } from "../shared/canvas";
 import { HTML_MAX, HTML_MIN, HTML_SIZE_TAG_EXAMPLE, htmlRenderSize, parseHtmlSize, withinHtmlLimits } from "../shared/html";
 import { isValidHandle, normalizeHandle, type NotificationCenter } from "./notifications";
+import type { ObjectMirror } from "./persist";
+import {
+  deleteProjectFile,
+  handleHyperframesExport,
+  handleHyperframesUpload,
+  listProjectFiles,
+  previewOriginFor,
+  readProjectFile,
+  writeProjectFile,
+  type HyperframesContext,
+} from "./hyperframes";
+import { hyperframesRenderSize } from "../shared/hyperframes";
+import { handleKimiChat } from "./kimi";
 import { colorFor } from "../shared/identity";
 import {
   nowId,
@@ -32,16 +47,15 @@ export interface ApiContext {
   host: DocHost;
   notifications: NotificationCenter;
   persistence?: PersistWorker;
+  /** object storage (hyperframes blob assets); shared with persist/images */
+  mirror?: ObjectMirror;
 }
 
-class ApiError extends Error {
-  constructor(
-    public status: number,
-    message: string
-  ) {
-    super(message);
-  }
-}
+const hfCtx = (ctx: ApiContext): HyperframesContext => ({
+  config: ctx.config,
+  host: ctx.host,
+  ...(ctx.mirror ? { mirror: ctx.mirror } : {}),
+});
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data, null, 2) + "\n", {
@@ -62,6 +76,19 @@ export async function handleApi(req: Request, url: URL, ctx: ApiContext): Promis
     if (path === "/api/status" && method === "GET") return getStatus(ctx);
     if (path === "/api/workspace" && method === "GET") return getWorkspace(ctx);
     if (path === "/api/pages" && method === "POST") return await postPage(ctx, await body(req));
+    if (path === "/api/pages/fork" && method === "POST") return await postFork(ctx, url, await body(req));
+    if (path === "/api/hyperframes/upload" && method === "POST")
+      return await handleHyperframesUpload(req, url, hfCtx(ctx));
+    if (path === "/api/hyperframes/export" && method === "GET")
+      return await handleHyperframesExport(resolvePage(ctx, url), hfCtx(ctx));
+    // the integrated Kimi agent — invoked from the web UI (public, like page
+    // creation: v1 permissions are org-level and the token is world-visible)
+    if (path === "/api/kimi/chat" && method === "POST")
+      return await handleKimiChat(
+        { kimi: ctx.config.kimi, notifications: ctx.notifications },
+        resolvePage(ctx, url),
+        await body(req)
+      );
 
     requireAuth(req, url, ctx.config);
     const agent = agentHandle(req, url);
@@ -81,6 +108,11 @@ export async function handleApi(req: Request, url: URL, ctx: ApiContext): Promis
       if (action === "replies") return await postReply(ctx, page, id!, await body(req), agent);
       return postResolve(page, id!, agent);
     }
+
+    if (path === "/api/hf/files" && method === "GET") return json(listProjectFiles(page));
+    if (path === "/api/hf/file" && method === "GET") return getHfFile(page, url);
+    if (path === "/api/hf/file" && method === "PUT") return await putHfFile(ctx, page, await body(req), agent);
+    if (path === "/api/hf/file" && method === "DELETE") return await deleteHfFile(ctx, page, url, await bodyOrEmpty(req), agent);
 
     if (path === "/api/notifications" && method === "GET") return await getNotifications(ctx, url, agent);
     if (path === "/api/notifications/ack" && method === "POST") return postAck(ctx, await body(req), agent);
@@ -129,6 +161,19 @@ function requireAgent(agent: string | null): string {
   return agent;
 }
 
+/** Like body(), but an absent/empty body is fine (DELETE with ?query). */
+async function bodyOrEmpty(req: Request): Promise<Record<string, unknown>> {
+  const text = await req.text();
+  if (!text.trim()) return {};
+  try {
+    const data = JSON.parse(text) as Record<string, unknown>;
+    if (typeof data !== "object" || data === null) throw new Error();
+    return data;
+  } catch {
+    throw new ApiError(400, "request body must be a JSON object (or empty)");
+  }
+}
+
 async function body(req: Request): Promise<Record<string, unknown>> {
   try {
     const data = (await req.json()) as Record<string, unknown>;
@@ -154,6 +199,7 @@ export function pageMeta(ctx: ApiContext, entry: PageEntry): PageMeta {
     path: ctx.host.pagePath(entry),
     automergeUrl: entry.record.automergeUrl,
     updatedAt: entry.record.updatedAt,
+    ...(entry.record.forkedFromId ? { forkedFromId: entry.record.forkedFromId } : {}),
   };
 }
 
@@ -167,10 +213,26 @@ function getWorkspace(ctx: ApiContext): Response {
 
 async function postPage(ctx: ApiContext, data: Record<string, unknown>): Promise<Response> {
   const title = typeof data.title === "string" && data.title.trim() ? data.title.trim() : "Untitled";
-  if (data.kind !== undefined && data.kind !== "markdown" && data.kind !== "canvas" && data.kind !== "html")
-    throw new ApiError(400, `kind must be "markdown", "canvas", or "html"`);
-  const entry = await ctx.host.createPage(title, data.kind === "canvas" || data.kind === "html" ? data.kind : undefined);
+  const kinds = ["markdown", "canvas", "html", "hyperframes"] as const;
+  if (data.kind !== undefined && !kinds.includes(data.kind as never))
+    throw new ApiError(400, `kind must be "markdown", "canvas", "html", or "hyperframes"`);
+  const kind = kinds.find(k => k === data.kind && k !== "markdown");
+  const entry = await ctx.host.createPage(title, kind);
   return json({ ok: true, page: pageMeta(ctx, entry) }, 201);
+}
+
+/** Fork any page: a NEW document (fresh id, slug, collaborators) initialized
+ * from the source's full history. Lineage is recorded; blob assets are
+ * content-addressed so a hyperframes fork shares them without copying.
+ * Public like POST /api/pages — v1 permissions are org-level. */
+async function postFork(ctx: ApiContext, url: URL, data: Record<string, unknown>): Promise<Response> {
+  const sourceId = typeof data.page === "string" ? data.page : url.searchParams.get("page");
+  if (!sourceId) throw new ApiError(400, 'send { "page": "<id>" } — GET /api/workspace lists all pages');
+  const source = ctx.host.page(sourceId);
+  if (!source) throw new ApiError(404, `no page with id ${sourceId}`);
+  if (data.title !== undefined && typeof data.title !== "string") throw new ApiError(400, "title must be a string");
+  const fork = await ctx.host.forkPage(source, data.title as string | undefined);
+  return json({ ok: true, page: pageMeta(ctx, fork), forkedFrom: { id: source.record.id, title: source.record.title } }, 201);
 }
 
 /** `?page=<id>` targets a specific page; the first page is the default. */
@@ -194,7 +256,14 @@ function docPayload(ctx: ApiContext, entry: PageEntry) {
       ? { kind: "canvas" as const, canvas: canvasToSpec(doc.canvas) }
       : meta.kind === "html"
         ? { kind: "html" as const, html: doc.content, size: htmlRenderSize(doc.content) }
-        : { markdown: doc.content }),
+        : meta.kind === "hyperframes"
+          ? {
+              kind: "hyperframes" as const,
+              ...listProjectFiles(entry),
+              size: hyperframesRenderSize(doc.hyperframes),
+              preview: `${apiPreviewOrigin(ctx)}/preview/${meta.id}/player`,
+            }
+          : { markdown: doc.content }),
     heads: A.getHeads(doc),
     automergeUrl: entry.handle.url,
     page: meta,
@@ -203,12 +272,23 @@ function docPayload(ctx: ApiContext, entry: PageEntry) {
   };
 }
 
+/** Preview origin as seen from API consumers (agents hold absolute URLs). */
+function apiPreviewOrigin(ctx: ApiContext): string {
+  try {
+    return previewOriginFor(ctx.config, new URL(ctx.config.baseUrl));
+  } catch {
+    return ctx.config.baseUrl;
+  }
+}
+
 function getDoc(ctx: ApiContext, page: PageEntry, url: URL): Response {
   const format = url.searchParams.get("format");
   if (format === "markdown" || format === "html") {
     const kind = page.record.kind ?? "markdown";
     if (kind === "canvas")
       throw new ApiError(400, "this page is a canvas — GET /api/doc (no format param) returns its JSON Canvas data");
+    if (kind === "hyperframes")
+      throw new ApiError(400, "this page is a hyperframes project — GET /api/hf/files lists its files, GET /api/hf/file?path=... reads one");
     if (format === "markdown" && kind === "html")
       throw new ApiError(400, "this page is html — use ?format=html for the raw source");
     if (format === "html" && kind === "markdown")
@@ -231,7 +311,13 @@ async function putDoc(
   const { markdown, title, canvas, html } = data;
   const kind = page.record.kind ?? "markdown";
   const bodyHint =
-    kind === "canvas" ? "send { canvas } and/or { title }" : kind === "html" ? "send { html } and/or { title }" : "send { markdown } and/or { title }";
+    kind === "canvas"
+      ? "send { canvas } and/or { title }"
+      : kind === "html"
+        ? "send { html } and/or { title }"
+        : kind === "hyperframes"
+          ? "this page is a hyperframes project — PUT /api/doc supports { title } only; edit files via PUT /api/hf/file { path, content }"
+          : "send { markdown } and/or { title }";
   if (markdown === undefined && title === undefined && canvas === undefined && html === undefined)
     throw new ApiError(400, bodyHint);
   if (markdown !== undefined && typeof markdown !== "string") throw new ApiError(400, "markdown must be a string");
@@ -242,7 +328,9 @@ async function putDoc(
       400,
       kind === "canvas"
         ? "this page is a canvas — PUT { canvas: { nodes, edges } } (JSON Canvas 1.0) instead of markdown"
-        : "this page is html — PUT { html: \"<!doctype html>...\" } instead of markdown"
+        : kind === "hyperframes"
+          ? "this page is a hyperframes project — edit files via PUT /api/hf/file { path, content }"
+          : "this page is html — PUT { html: \"<!doctype html>...\" } instead of markdown"
     );
   if (canvas !== undefined && kind !== "canvas")
     throw new ApiError(400, `this page is ${kind} — ${bodyHint}, or create a canvas page via POST /api/pages { kind: "canvas" }`);
@@ -313,61 +401,7 @@ async function putDoc(
   });
 }
 
-interface EditOp {
-  oldText: string;
-  newText: string;
-  replaceAll?: boolean;
-}
-
-interface PlannedSplice {
-  index: number;
-  del: number;
-  /** exact text being deleted — lets the typewriter verify/relocate */
-  delText: string;
-  ins: string;
-}
-
-/** Validate + plan all edits against a plain string before touching the doc,
- * so a bad edit can never half-apply. Returned splices are ordered for direct
- * sequential application. */
-export function planEdits(text: string, edits: EditOp[]): { splices: PlannedSplice[]; finalText: string } {
-  const splices: PlannedSplice[] = [];
-  edits.forEach((e, i) => {
-    if (typeof e?.oldText !== "string" || typeof e?.newText !== "string")
-      throw new ApiError(400, `edits[${i}] must be { oldText, newText }`);
-    if (e.oldText === "")
-      throw new ApiError(400, `edits[${i}].oldText is empty — to add content use POST /api/doc/append`);
-
-    const indices = indicesOf(text, e.oldText);
-    if (indices.length === 0)
-      throw new ApiError(
-        409,
-        `edits[${i}]: oldText not found — the doc may have changed; GET /api/doc and retry with the exact current text`
-      );
-    if (indices.length > 1 && !e.replaceAll)
-      throw new ApiError(
-        409,
-        `edits[${i}]: oldText matches ${indices.length} locations — include more surrounding context, or set "replaceAll": true`
-      );
-
-    const targets = e.replaceAll ? [...indices].reverse() : [indices[0]!];
-    for (const index of targets) {
-      splices.push({ index, del: e.oldText.length, delText: e.oldText, ins: e.newText });
-      text = text.slice(0, index) + e.newText + text.slice(index + e.oldText.length);
-    }
-  });
-  return { splices, finalText: text };
-}
-
-function indicesOf(text: string, needle: string): number[] {
-  const out: number[] = [];
-  let i = 0;
-  while ((i = text.indexOf(needle, i)) !== -1) {
-    out.push(i);
-    i += needle.length;
-  }
-  return out;
-}
+export { planEdits } from "./edits";
 
 /** Animate splices in at human typing speed (when configured + an agent is
  * acting): per-doc queue keeps read-after-write for follow-up requests, and
@@ -407,10 +441,27 @@ async function postEdits(
   if (!Array.isArray(edits) || edits.length === 0)
     throw new ApiError(400, 'send { "edits": [{ "oldText": "...", "newText": "..." }] }');
 
+  // hyperframes edits target one project file: { file: "index.html", edits }
+  if (page.record.kind === "hyperframes") {
+    const filePath = data.file;
+    if (typeof filePath !== "string")
+      throw new ApiError(400, 'this page is a hyperframes project — include "file": "<path>" (e.g. "index.html") alongside your edits');
+    return enqueue(page.handle.url, async () => {
+      const { path, file } = readProjectFile(page, filePath);
+      if (file.kind !== "text") throw new ApiError(400, `${path} is a binary asset — text edits only`);
+      const { splices } = planEditOps(file.content, edits as EditOp[]);
+      // instant, like html pages: humans watch the rendered preview
+      page.handle.change(d => {
+        for (const s of splices) A.splice(d, ["hyperframes", "files", path, "content"], s.index, s.delText.length, s.ins);
+      }, changeOptions(agent));
+      return json({ ok: true, applied: splices.length, file: path, ...docPayload(ctx, page) });
+    });
+  }
+
   // plan inside the per-doc queue so a request that lands mid-animation
   // validates against the settled content, not a half-typed intermediate
   return enqueue(page.handle.url, async () => {
-    const { splices, finalText } = planEdits(page.handle.doc().content, edits as EditOp[]);
+    const { splices, finalText } = planEditOps(page.handle.doc().content, edits as EditOp[]);
     if (page.record.kind === "html") {
       const size = parseHtmlSize(finalText);
       if (!size)
@@ -440,6 +491,8 @@ async function postAppend(
     throw new ApiError(400, "this page is a canvas — GET /api/doc for its JSON, then PUT /api/doc { canvas } to edit");
   if (page.record.kind === "html")
     throw new ApiError(400, "append doesn't apply to html pages (it would land after </html>) — use POST /api/doc/edits or PUT { html }");
+  if (page.record.kind === "hyperframes")
+    throw new ApiError(400, "append doesn't apply to hyperframes projects — use POST /api/doc/edits { file, edits } or PUT /api/hf/file");
   if (typeof markdown !== "string" || markdown.length === 0) throw new ApiError(400, "send { markdown } to append");
 
   return enqueue(page.handle.url, async () => {
@@ -612,8 +665,58 @@ function getStatus(ctx: ApiContext): Response {
     docUrl: ctx.host.defaultPage.handle.url,
     agents: ctx.notifications.statuses(),
     persistence: ctx.persistence !== undefined,
+    previewOrigin: apiPreviewOrigin(ctx),
+    kimi: ctx.config.kimi !== undefined,
   };
   return json(payload);
+}
+
+// ---------- hyperframes project files ----------
+
+function getHfFile(page: PageEntry, url: URL): Response {
+  const rawPath = url.searchParams.get("path");
+  if (!rawPath) throw new ApiError(400, "pass ?path=<project-relative path> — GET /api/hf/files lists them");
+  const { path, file } = readProjectFile(page, rawPath);
+  if (url.searchParams.get("format") === "json" || file.kind === "blob") {
+    return json({
+      path,
+      kind: file.kind,
+      mimeType: file.mimeType,
+      ...(file.kind === "text" ? { content: file.content } : { sha256: file.sha256, byteSize: file.byteSize }),
+    });
+  }
+  // raw text by default — agents diff/edit against exactly these bytes
+  return new Response(file.content, { headers: { "content-type": "text/plain; charset=utf-8" } });
+}
+
+async function putHfFile(
+  ctx: ApiContext,
+  page: PageEntry,
+  data: Record<string, unknown>,
+  agent: string | null
+): Promise<Response> {
+  const { path, content } = data;
+  if (typeof path !== "string" || typeof content !== "string")
+    throw new ApiError(400, 'send { "path": "styles.css", "content": "..." } — text files only');
+  return enqueue(page.handle.url, async () => {
+    const result = writeProjectFile(page, path, content, changeOptions(agent));
+    return json({ ok: true, ...result, ...docPayload(ctx, page) }, result.created ? 201 : 200);
+  });
+}
+
+async function deleteHfFile(
+  ctx: ApiContext,
+  page: PageEntry,
+  url: URL,
+  data: Record<string, unknown>,
+  agent: string | null
+): Promise<Response> {
+  const raw = typeof data.path === "string" ? data.path : url.searchParams.get("path");
+  if (!raw) throw new ApiError(400, 'send { "path": "..." } (or ?path=)');
+  return enqueue(page.handle.url, async () => {
+    const path = deleteProjectFile(page, raw, changeOptions(agent));
+    return json({ ok: true, deleted: path, ...docPayload(ctx, page) });
+  });
 }
 
 // ---------- agent presence in the live doc ----------

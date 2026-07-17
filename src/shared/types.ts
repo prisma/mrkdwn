@@ -1,6 +1,7 @@
 /** Shared data model. The whole document — text, title, comments — lives in one
  * Automerge doc so everything syncs and merges together. */
 import type { CanvasData } from "./canvas";
+import type { HyperframesProject } from "./hyperframes";
 
 export type AuthorKind = "human" | "agent";
 
@@ -44,6 +45,10 @@ export interface MrkdwnDoc {
   /** present on canvas pages: JSON Canvas data, CRDT-keyed by id
    * (see shared/canvas.ts for the spec mapping) */
   canvas?: CanvasData;
+  /** present on hyperframes pages: a multi-file video project — text files
+   * as independently-mergeable strings, binaries as content-addressed blob
+   * references (see shared/hyperframes.ts) */
+  hyperframes?: HyperframesProject;
 }
 
 /** Ephemeral presence message, broadcast over the Automerge sync channel. */
@@ -94,6 +99,11 @@ export interface StatusPayload {
   agents: AgentStatus[];
   /** true when the server mirrors docs to S3 — drives the durability dot */
   persistence: boolean;
+  /** origin that serves /preview/* (hyperframes compositions run there,
+   * isolated from the app origin) — absolute, no trailing slash */
+  previewOrigin: string;
+  /** true when the integrated Kimi agent is configured (KIMI_API_KEY) */
+  kimi: boolean;
 }
 
 /** One page of a workspace, as served by GET /api/workspace. */
@@ -102,12 +112,16 @@ export interface PageMeta {
   title: string;
   slug: string;
   /** "markdown" pages edit as text; "canvas" pages are JSON Canvas boards;
-   * "html" pages render agent-written HTML in a sandboxed iframe */
-  kind: "markdown" | "canvas" | "html";
+   * "html" pages render agent-written HTML in a sandboxed iframe;
+   * "hyperframes" pages are multi-file video projects played via
+   * @hyperframes/player from the preview origin */
+  kind: "markdown" | "canvas" | "html" | "hyperframes";
   /** `/{workspaceHandle}/{id}-{slug}` — the id does the lookup, slug is cosmetic */
   path: string;
   automergeUrl: string;
   updatedAt: number;
+  /** lineage: the page this one was forked from, when applicable */
+  forkedFromId?: string;
 }
 
 /** Unauthenticated workspace payload (single public workspace in v1). */

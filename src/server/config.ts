@@ -18,11 +18,23 @@ export interface S3Config {
   endpoint: string;
 }
 
+export interface KimiConfig {
+  apiKey: string;
+  model: string;
+  baseUrl: string;
+}
+
 export interface ServerConfig {
   port: number;
   dataDir: string;
   /** public base url used in agent snippets, e.g. http://localhost:4545 */
   baseUrl: string;
+  /** origin serving /preview/* (hyperframes compositions execute there, not
+   * on the app origin). Unset → derived per request (localhost ↔ 127.0.0.1
+   * swap in dev). Set MRKDWN_PREVIEW_ORIGIN in production. */
+  previewOrigin?: string;
+  /** integrated Kimi agent (Moonshot API); unset → feature hidden */
+  kimi?: KimiConfig;
   /** Prisma Postgres connection; unset → in-memory registry (tests) */
   databaseUrl?: string;
   /** durable S3 mirror for automerge files; unset → persistence disabled */
@@ -74,6 +86,14 @@ export function loadConfig(
   if (process.env.MRKDWN_AGENT_TOKEN) state.agentToken = process.env.MRKDWN_AGENT_TOKEN;
 
   const s3 = s3ConfigFromEnv();
+  const previewOrigin = process.env.MRKDWN_PREVIEW_ORIGIN?.replace(/\/$/, "");
+  const kimi: KimiConfig | undefined = process.env.KIMI_API_KEY
+    ? {
+        apiKey: process.env.KIMI_API_KEY,
+        model: process.env.KIMI_MODEL ?? "kimi-k3",
+        baseUrl: (process.env.KIMI_BASE_URL ?? "https://api.moonshot.ai/v1").replace(/\/$/, ""),
+      }
+    : undefined;
   // agent edits type in at human speed (set MRKDWN_AGENT_TYPING=off for instant)
   const agentTyping =
     process.env.MRKDWN_AGENT_TYPING === "off" ? undefined : { intervalMs: 35, budgetMs: 4000 };
@@ -85,6 +105,8 @@ export function loadConfig(
     ...(databaseUrl ? { databaseUrl } : {}),
     ...(s3 ? { s3 } : {}),
     ...(agentTyping ? { agentTyping } : {}),
+    ...(previewOrigin ? { previewOrigin } : {}),
+    ...(kimi ? { kimi } : {}),
     workspace,
     state,
     saveState() {

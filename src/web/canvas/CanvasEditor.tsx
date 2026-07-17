@@ -34,6 +34,7 @@ import { PresenceStore } from "../app/presence";
 import { loadIdentity } from "../app/identity";
 import { HTML_SANDBOX, htmlRenderSize } from "../../shared/html";
 import { HtmlView } from "../components/HtmlView";
+import { HyperframesFrame } from "../components/HyperframesView";
 import { usePageEmbeds } from "../components/PageEmbed";
 import { pageExt } from "../components/Sidebar";
 
@@ -842,6 +843,11 @@ function NodeContent(p: NodeViewProps) {
         {page ? (
           page.kind === "html" ? (
             <HtmlEmbed automergeUrl={page.automergeUrl} width={node.width} height={node.height} />
+          ) : page.kind === "hyperframes" ? (
+            // inert on the canvas (drags stay drags) — interact in focus mode
+            <div className="canvas-hf-embed">
+              <HyperframesFrame pageId={page.id} automergeUrl={page.automergeUrl} title={page.title || "video"} />
+            </div>
           ) : (
             <MarkdownEmbed automergeUrl={page.automergeUrl} />
           )
@@ -1058,6 +1064,10 @@ function FocusOverlay(p: {
               page.kind === "html" ? (
                 // interactive here (no pointer-events lock like the canvas tile)
                 <HtmlView handle={handle} chromeless />
+              ) : page.kind === "hyperframes" ? (
+                <div className="focus-hf">
+                  <HyperframesFrame pageId={page.id} automergeUrl={page.automergeUrl} title={page.title || "video"} />
+                </div>
               ) : (
                 <PageEditor handle={handle} pages={p.pages} onNavigate={p.onNavigate} />
               )

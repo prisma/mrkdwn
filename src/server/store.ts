@@ -19,7 +19,7 @@ export interface WorkspaceRecord {
   isPublic: boolean;
 }
 
-export type DocumentKind = "markdown" | "canvas" | "html";
+export type DocumentKind = "markdown" | "canvas" | "html" | "hyperframes";
 
 export interface DocumentRecord {
   id: string;
@@ -27,9 +27,13 @@ export interface DocumentRecord {
   title: string;
   slug: string;
   /** absent/"markdown" = markdown page; "canvas" = JSON Canvas board;
-   * "html" = agent-authored HTML rendered in a sandboxed iframe */
+   * "html" = agent-authored HTML rendered in a sandboxed iframe;
+   * "hyperframes" = multi-file video project */
   kind?: DocumentKind;
   automergeUrl: string;
+  /** fork lineage: source document id + its Automerge heads at fork time */
+  forkedFromId?: string;
+  forkedFromHeads?: string[];
   /** last completed S3 write (persist worker), if any */
   persistedAt?: number;
   createdAt: number;
@@ -89,7 +93,13 @@ export class PrismaStore implements DocStore {
   }
 
   async createDocument(rec: Omit<DocumentRecord, "createdAt" | "updatedAt" | "persistedAt">): Promise<DocumentRecord> {
-    const row = await this.orm.Document.create({ ...rec, kind: rec.kind ?? null, updatedAt: new Date() });
+    const row = await this.orm.Document.create({
+      ...rec,
+      kind: rec.kind ?? null,
+      forkedFromId: rec.forkedFromId ?? null,
+      forkedFromHeads: rec.forkedFromHeads ? JSON.stringify(rec.forkedFromHeads) : null,
+      updatedAt: new Date(),
+    });
     return rowToDoc(row);
   }
 
@@ -123,17 +133,31 @@ function rowToDoc(row: {
   slug: string;
   kind?: string | null;
   automergeUrl: string;
+  forkedFromId?: string | null;
+  forkedFromHeads?: string | null;
   persistedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }): DocumentRecord {
   return {
     ...row,
-    kind: row.kind === "canvas" || row.kind === "html" ? row.kind : undefined,
+    kind: row.kind === "canvas" || row.kind === "html" || row.kind === "hyperframes" ? row.kind : undefined,
+    forkedFromId: row.forkedFromId ?? undefined,
+    forkedFromHeads: parseHeads(row.forkedFromHeads),
     persistedAt: row.persistedAt ? row.persistedAt.getTime() : undefined,
     createdAt: row.createdAt.getTime(),
     updatedAt: row.updatedAt.getTime(),
   };
+}
+
+function parseHeads(raw: string | null | undefined): string[] | undefined {
+  if (!raw) return undefined;
+  try {
+    const heads = JSON.parse(raw) as unknown;
+    return Array.isArray(heads) && heads.every(h => typeof h === "string") ? heads : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // ---------- in-memory (tests / DB-less) ----------

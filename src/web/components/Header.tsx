@@ -27,6 +27,8 @@ interface HeaderProps {
   /** click an avatar → highlight contributions + filter comments */
   onSpotlight(author: Author): void;
   spotlightId: string | null;
+  /** fork this page into a new page (full history + lineage) */
+  onFork(): void;
 }
 
 /** Claude-spark silhouette — the avatar shape that says "agent". */
@@ -274,6 +276,19 @@ export function Header(p: HeaderProps) {
             <path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
           </svg>
         )}
+      </button>
+
+      <button
+        className="iconbtn"
+        onClick={p.onFork}
+        title="Fork this page — a new page starting from this one (history included)"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="6" cy="5" r="2.4" />
+          <circle cx="18" cy="5" r="2.4" />
+          <circle cx="12" cy="19" r="2.4" />
+          <path d="M6 7.4v1.1a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V7.4M12 11.5v5" />
+        </svg>
       </button>
 
       <button className="btn btn--primary" onClick={() => p.onInviteAgent()}>

@@ -16,9 +16,15 @@ model Document {
   workspaceId  String
   title        String
   slug         String
-  /// document kind: null = markdown page, "canvas" = JSON Canvas board
+  /// document kind: null = markdown page, "canvas" = JSON Canvas board,
+  /// "html" = sandboxed HTML page, "hyperframes" = HyperFrames video project
   kind         String?
   automergeUrl String    @unique
+  /// fork lineage: the document this one was forked from (if any), and the
+  /// Automerge heads of the source at fork time (JSON string[]) — enables
+  /// "changes since fork" and future visual diff
+  forkedFromId    String?
+  forkedFromHeads String?
   /// when the doc's full Automerge file was last written to S3 — maintained
   /// by the persist worker alongside the S3 write, never on the edit hot path
   persistedAt  DateTime?

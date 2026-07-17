@@ -20,6 +20,8 @@ import { CANVAS_PRESETS, type CanvasData, type CanvasNode } from "../../shared/c
 import { anchorPoint, defaultSides, edgePath } from "../canvas/geometry";
 import { renderMarkdown } from "../canvas/md";
 import { HTML_SANDBOX, htmlRenderSize } from "../../shared/html";
+import { hyperframesRenderSize } from "../../shared/hyperframes";
+import { HyperframesFrame } from "./HyperframesView";
 import { pageExt } from "./Sidebar";
 
 export type MountEmbed = (el: HTMLElement, slug: string) => () => void;
@@ -89,9 +91,42 @@ function EmbedBody(p: { page: PageMeta; onNavigate(id: string): void }) {
   const [doc] = useDocument<MrkdwnDoc>(p.page.automergeUrl as never, { suspense: false });
   if (!doc) return <div className="md-embed-loading">loading…</div>;
   if (p.page.kind === "html") return <HtmlBody html={doc.content} />;
+  if (p.page.kind === "hyperframes") return <HyperframesBody page={p.page} />;
   if (p.page.kind === "canvas")
     return <CanvasThumb canvas={doc.canvas ?? { nodes: {}, edges: {} }} onOpen={() => p.onNavigate(p.page.id)} />;
   return <div className="canvas-md md-embed-md" dangerouslySetInnerHTML={{ __html: renderMarkdown(doc.content) }} />;
+}
+
+/** A hyperframes page embedded in markdown: the live player, sized to the
+ * composition's aspect ratio at content width. Fully interactive (the
+ * player's own controls handle play/seek). */
+function HyperframesBody(p: { page: PageMeta }) {
+  const [doc] = useDocument<MrkdwnDoc>(p.page.automergeUrl as never, { suspense: false });
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const compute = () => el.clientWidth > 40 && setWidth(el.clientWidth);
+    compute();
+    const ro = new ResizeObserver(compute);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const size = hyperframesRenderSize(doc?.hyperframes);
+  const height = width > 0 ? Math.round((width * size.height) / size.width) : 220;
+  return (
+    <div ref={wrapRef} className="md-embed-hf" style={{ height }}>
+      {width > 0 && (
+        <HyperframesFrame
+          pageId={p.page.id}
+          automergeUrl={p.page.automergeUrl}
+          className="hf-frame hf-frame--embed"
+          title={p.page.title || "HyperFrames project"}
+        />
+      )}
+    </div>
+  );
 }
 
 /** The html page's iframe, scaled so the declared width fills the content

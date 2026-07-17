@@ -30,7 +30,7 @@ import type {
 } from '@prisma-next/contract/types';
 
 export type StorageHash =
-  StorageHashBase<'sha256:e93f7df4b304c507c2b108a9d572902cec401a1994326ad7c2203ce35ae6b5d4'>;
+  StorageHashBase<'sha256:c21873d501289dc93d7f2b89164e21e30010deaa89a9d5ebf05f23e807f975fb'>;
 export type ExecutionHash =
   ExecutionHashBase<'sha256:bdb571467056bd4774afd3edf2b922e7737813c03417153d0091d2cea7f0afc1'>;
 export type ProfileHash =
@@ -52,6 +52,8 @@ export type FieldOutputTypes = {
       readonly slug: CodecTypes['pg/text@1']['output'];
       readonly kind: CodecTypes['pg/text@1']['output'] | null;
       readonly automergeUrl: CodecTypes['pg/text@1']['output'];
+      readonly forkedFromId: CodecTypes['pg/text@1']['output'] | null;
+      readonly forkedFromHeads: CodecTypes['pg/text@1']['output'] | null;
       readonly persistedAt: CodecTypes['pg/timestamptz@1']['output'] | null;
       readonly createdAt: CodecTypes['pg/timestamptz@1']['output'];
       readonly updatedAt: CodecTypes['pg/timestamptz@1']['output'];
@@ -83,6 +85,8 @@ export type FieldInputTypes = {
       readonly slug: CodecTypes['pg/text@1']['input'];
       readonly kind: CodecTypes['pg/text@1']['input'] | null;
       readonly automergeUrl: CodecTypes['pg/text@1']['input'];
+      readonly forkedFromId: CodecTypes['pg/text@1']['input'] | null;
+      readonly forkedFromHeads: CodecTypes['pg/text@1']['input'] | null;
       readonly persistedAt: CodecTypes['pg/timestamptz@1']['input'] | null;
       readonly createdAt: CodecTypes['pg/timestamptz@1']['input'];
       readonly updatedAt: CodecTypes['pg/timestamptz@1']['input'];
@@ -151,6 +155,16 @@ type ContractBase = Omit<
                   readonly nativeType: 'text';
                   readonly codecId: 'pg/text@1';
                   readonly nullable: false;
+                };
+                readonly forkedFromId: {
+                  readonly nativeType: 'text';
+                  readonly codecId: 'pg/text@1';
+                  readonly nullable: true;
+                };
+                readonly forkedFromHeads: {
+                  readonly nativeType: 'text';
+                  readonly codecId: 'pg/text@1';
+                  readonly nullable: true;
                 };
                 readonly persistedAt: {
                   readonly nativeType: 'timestamptz';
@@ -327,6 +341,14 @@ type ContractBase = Omit<
                 readonly nullable: false;
                 readonly type: { readonly kind: 'scalar'; readonly codecId: 'pg/text@1' };
               };
+              readonly forkedFromId: {
+                readonly nullable: true;
+                readonly type: { readonly kind: 'scalar'; readonly codecId: 'pg/text@1' };
+              };
+              readonly forkedFromHeads: {
+                readonly nullable: true;
+                readonly type: { readonly kind: 'scalar'; readonly codecId: 'pg/text@1' };
+              };
               readonly persistedAt: {
                 readonly nullable: true;
                 readonly type: { readonly kind: 'scalar'; readonly codecId: 'pg/timestamptz@1' };
@@ -363,6 +385,8 @@ type ContractBase = Omit<
                 readonly slug: { readonly column: 'slug' };
                 readonly kind: { readonly column: 'kind' };
                 readonly automergeUrl: { readonly column: 'automergeUrl' };
+                readonly forkedFromId: { readonly column: 'forkedFromId' };
+                readonly forkedFromHeads: { readonly column: 'forkedFromHeads' };
                 readonly persistedAt: { readonly column: 'persistedAt' };
                 readonly createdAt: { readonly column: 'createdAt' };
                 readonly updatedAt: { readonly column: 'updatedAt' };

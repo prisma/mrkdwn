@@ -18,6 +18,7 @@ import { CommandPalette } from "./components/CommandPalette";
 import { CommentsPanel, type DraftComment, type PositionedComment } from "./components/CommentsPanel";
 import { CanvasEditor } from "./canvas/CanvasEditor";
 import { HtmlView } from "./components/HtmlView";
+import { HyperframesView } from "./components/HyperframesView";
 import { usePageEmbeds } from "./components/PageEmbed";
 import { InviteAgentModal } from "./components/InviteAgentModal";
 import { SelectionToolbar } from "./components/SelectionToolbar";
@@ -33,7 +34,11 @@ interface AppProps {
   /** create without navigating (the `/page` inline-link flow) */
   onCreatePage(title?: string): Promise<PageMeta | null>;
   /** create, open, and land in the (selected) title */
-  onCreateAndOpenPage(title?: string, kind?: "markdown" | "canvas" | "html"): Promise<PageMeta | null>;
+  onCreateAndOpenPage(title?: string, kind?: PageMeta["kind"]): Promise<PageMeta | null>;
+  /** import a HyperFrames project zip → new hyperframes page, opened */
+  onUploadHyperframes(file: File): Promise<PageMeta | null>;
+  /** fork a page into a new page (full history), open the fork */
+  onForkPage(pageId: string): Promise<PageMeta | null>;
   /** this page was just created — focus + select its title on mount */
   focusTitle: boolean;
   onFocusTitleConsumed(): void;
@@ -406,6 +411,7 @@ export function App(props: AppProps) {
         onToggleSidebar={() => setSidebarOpen(o => !o)}
         onSpotlight={applySpotlight}
         spotlightId={spotlight?.id ?? null}
+        onFork={() => void props.onForkPage(props.currentPageId)}
       />
 
       <div className="doc-layout">
@@ -417,13 +423,32 @@ export function App(props: AppProps) {
           onCreatePage={() => void props.onCreateAndOpenPage()}
           onCreateCanvas={() => void props.onCreateAndOpenPage(undefined, "canvas")}
           onCreateHtml={() => void props.onCreateAndOpenPage(undefined, "html")}
+          onCreateHyperframes={() => void props.onCreateAndOpenPage(undefined, "hyperframes")}
+          onUploadHyperframes={file => void props.onUploadHyperframes(file)}
         />
         <main
           className={
-            "doc-main" + (pageKind === "canvas" ? " doc-main--canvas" : pageKind === "html" ? " doc-main--html" : "")
+            "doc-main" +
+            (pageKind === "canvas"
+              ? " doc-main--canvas"
+              : pageKind === "html"
+                ? " doc-main--html"
+                : pageKind === "hyperframes"
+                  ? " doc-main--hf"
+                  : "")
           }
         >
-          <div className={pageKind === "canvas" ? "canvas-column" : pageKind === "html" ? "html-column" : "doc-column"}>
+          <div
+            className={
+              pageKind === "canvas"
+                ? "canvas-column"
+                : pageKind === "html"
+                  ? "html-column"
+                  : pageKind === "hyperframes"
+                    ? "hf-column"
+                    : "doc-column"
+            }
+          >
             <input
               ref={titleRef}
               className="title-input"
@@ -453,6 +478,13 @@ export function App(props: AppProps) {
               />
             ) : pageKind === "html" ? (
               <HtmlView handle={handle} />
+            ) : pageKind === "hyperframes" ? (
+              <HyperframesView
+                handle={handle}
+                pageId={props.currentPageId}
+                kimi={status?.kimi ?? false}
+                readOnly={!connected}
+              />
             ) : (
             <div className="editor-wrap">
               <Editor

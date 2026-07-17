@@ -5,6 +5,7 @@
  * can reach any of them; title edits in a page sync back to the registry
  * (debounced), re-deriving the slug.
  */
+import * as A from "@automerge/automerge";
 import { Repo, type DocHandle, type PeerId, type AutomergeUrl } from "@automerge/automerge-repo";
 import { WebSocketServerAdapter } from "@automerge/automerge-repo-network-websocket";
 import { NodeFSStorageAdapter } from "@automerge/automerge-repo-storage-nodefs";
@@ -16,6 +17,7 @@ import type { MrkdwnDoc } from "../shared/types";
 import { newPageId, uniqueSlug } from "../shared/slug";
 import { emptyCanvas } from "../shared/canvas";
 import { starterHtml } from "../shared/html";
+import { starterHyperframes } from "../shared/hyperframes";
 import { WELCOME_DOC } from "./welcome";
 import { createObjectMirror, mirrorKey, type ObjectMirror } from "./persist";
 import type { DocumentKind } from "./store";
@@ -39,7 +41,11 @@ export interface DocHost {
   pages(): PageEntry[];
   page(id: string): PageEntry | undefined;
   pageBySlug(slug: string): PageEntry | undefined;
-  createPage(title: string, kind?: DocumentKind): Promise<PageEntry>;
+  createPage(title: string, kind?: DocumentKind, initial?: MrkdwnDoc): Promise<PageEntry>;
+  /** Fork: a NEW document identity (fresh Automerge document id — forks never
+   * merge back) initialized with the source's full history, so attribution
+   * and comments survive. Lineage is recorded in the registry. */
+  forkPage(source: PageEntry, title?: string): Promise<PageEntry>;
   onPage(cb: (entry: PageEntry) => void): void;
   pagePath(entry: PageEntry): string;
 }
@@ -134,27 +140,52 @@ export async function openDocHost(
     return entry;
   };
 
-  const createEntry = async (title: string, kind?: DocumentKind, initial?: MrkdwnDoc): Promise<PageEntry> => {
-    const doc: MrkdwnDoc = initial ?? {
-      title,
-      content: kind === "html" ? starterHtml(title) : "",
-      comments: {},
-      ...(kind === "canvas" ? { canvas: emptyCanvas() } : {}),
-    };
-    const handle = repo.create<MrkdwnDoc>(doc);
+  const registerEntry = async (
+    handle: DocHandle<MrkdwnDoc>,
+    title: string,
+    kind: DocumentKind | undefined,
+    lineage?: { forkedFromId: string; forkedFromHeads: string[] }
+  ): Promise<PageEntry> => {
     const record = await store.createDocument({
       id: newPageId(),
       workspaceId: workspace.id,
       title,
       slug: uniqueSlug(title, takenSlugs()),
-      ...(kind === "canvas" || kind === "html" ? { kind } : {}),
+      ...(kind && kind !== "markdown" ? { kind } : {}),
       automergeUrl: handle.url,
+      ...(lineage ?? {}),
     });
     const entry: PageEntry = { record, handle };
     entries.set(record.id, entry);
     watchTitle(entry);
     for (const cb of pageListeners) cb(entry);
     return entry;
+  };
+
+  const createEntry = async (title: string, kind?: DocumentKind, initial?: MrkdwnDoc): Promise<PageEntry> => {
+    const doc: MrkdwnDoc = initial ?? {
+      title,
+      content: kind === "html" ? starterHtml(title) : "",
+      comments: {},
+      ...(kind === "canvas" ? { canvas: emptyCanvas() } : {}),
+      ...(kind === "hyperframes" ? { hyperframes: starterHyperframes(title) } : {}),
+    };
+    const handle = repo.create<MrkdwnDoc>(doc);
+    return registerEntry(handle, title, kind);
+  };
+
+  const forkEntry = async (source: PageEntry, title?: string): Promise<PageEntry> => {
+    const src = source.handle.doc();
+    const heads = A.getHeads(src);
+    // import a full-history snapshot under a NEW document id: unlike a cloned
+    // handle of the same id, an imported doc never syncs/merges with its source
+    const handle = repo.import<MrkdwnDoc>(A.save(src));
+    const forkTitle = title?.trim() || `${src.title?.trim() || "Untitled"} (fork)`;
+    handle.change(d => A.updateText(d, ["title"], forkTitle));
+    return registerEntry(handle, forkTitle, source.record.kind, {
+      forkedFromId: source.record.id,
+      forkedFromHeads: heads,
+    });
   };
 
   // Open everything registered; migrate a pre-workspace single doc; seed the
@@ -221,7 +252,8 @@ export async function openDocHost(
     pages: ordered,
     page: id => entries.get(id),
     pageBySlug: slug => ordered().find(e => e.record.slug === slug),
-    createPage: (title, kind) => createEntry(title, kind),
+    createPage: (title, kind, initial) => createEntry(title, kind, initial),
+    forkPage: (source, title) => forkEntry(source, title),
     onPage: cb => pageListeners.push(cb),
     pagePath: entry => `/${workspace.handle}/${entry.record.id}${entry.record.slug ? `-${entry.record.slug}` : ""}`,
   };

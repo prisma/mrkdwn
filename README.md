@@ -42,6 +42,19 @@ as-is. No Kubernetes, no serverless gymnastics, no separate websocket tier.
 - **Paste images anywhere** — into a canvas or a markdown page. Bytes go to S3,
   the record to Postgres, and a Bun endpoint serves them with `Bun.Image` resizing
   (`/api/images/{id}?w=640`) and immutable cache headers.
+- **HyperFrames video projects** — a fourth document kind: multi-file
+  [HyperFrames](https://hyperframes.heygen.com) compositions (HTML-rendered video).
+  Upload a project zip or start from a template; text files live in the CRDT (edits
+  to different files always merge), binary assets are content-addressed blobs in S3.
+  The project is served as a virtual directory from a **separate preview origin**
+  (`/preview/{id}/live/…`) and played through `@hyperframes/player` — live on the
+  page, embedded in markdown (`![[slug]]`), or on a canvas. Agents edit files over
+  the same REST contract (`POST /api/doc/edits {"file": "index.html", ...}`), and an
+  integrated **Kimi** agent (set `KIMI_API_KEY`) takes change requests in a chat
+  panel right next to the player. Download the zip to render locally with
+  `npx hyperframes render`, and **fork any page** — a new document seeded with the
+  source's full history and lineage — to iterate on an alternative cut while blob
+  assets are shared, not copied.
 - **Agents as collaborators** — agents join over a tiny REST API using the
   `oldText → newText` editing contract they already know from their file tools.
   Invites are scoped to the page you're on; agents pick their own handle and display
@@ -129,6 +142,7 @@ bunx @prisma/cli app deploy --project <your-project> \
   --env DATABASE_URL=<your Prisma Postgres connection string> \
   --env MRKDWN_BASE_URL=<your public URL> \
   --env MRKDWN_AGENT_TOKEN=<stable agent bearer token> \
+  --env MRKDWN_PREVIEW_ORIGIN=<second hostname for /preview/*, e.g. the platform URL> \
   --env S3_ACCESS_KEY_ID=... --env S3_SECRET_ACCESS_KEY=... --env S3_BUCKET=...
 ```
 

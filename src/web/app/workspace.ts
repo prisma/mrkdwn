@@ -39,7 +39,7 @@ export function useWorkspace(intervalMs = 5000) {
   return { workspace, refresh };
 }
 
-export async function createPageRequest(title?: string, kind?: "markdown" | "canvas" | "html"): Promise<PageMeta | null> {
+export async function createPageRequest(title?: string, kind?: PageMeta["kind"]): Promise<PageMeta | null> {
   try {
     const res = await fetch("/api/pages", {
       method: "POST",
@@ -51,5 +51,38 @@ export async function createPageRequest(title?: string, kind?: "markdown" | "can
     return data.page;
   } catch {
     return null;
+  }
+}
+
+/** Fork a page: a new page initialized from the source's full history. */
+export async function forkPageRequest(pageId: string, title?: string): Promise<PageMeta | null> {
+  try {
+    const res = await fetch("/api/pages/fork", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ page: pageId, ...(title ? { title } : {}) }),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { page: PageMeta };
+    return data.page;
+  } catch {
+    return null;
+  }
+}
+
+/** Upload a HyperFrames project zip → a new hyperframes page. */
+export async function uploadHyperframesRequest(file: File): Promise<{ page: PageMeta } | { error: string }> {
+  const title = file.name.replace(/\.zip$/i, "").trim() || "Untitled video";
+  try {
+    const res = await fetch(`/api/hyperframes/upload?title=${encodeURIComponent(title)}`, {
+      method: "POST",
+      headers: { "content-type": "application/zip" },
+      body: file,
+    });
+    const data = (await res.json()) as { page?: PageMeta; error?: string };
+    if (!res.ok || !data.page) return { error: data.error ?? `upload failed (${res.status})` };
+    return { page: data.page };
+  } catch (e) {
+    return { error: String(e) };
   }
 }
