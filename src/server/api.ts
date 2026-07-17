@@ -29,7 +29,7 @@ import {
   type HyperframesContext,
 } from "./hyperframes";
 import { fileKey as hfFileKey, hyperframesRenderSize } from "../shared/hyperframes";
-import { handleKimiChat, handleKimiJob } from "./kimi";
+import { handleKimiChat, handleKimiJob, handleKimiJobs } from "./kimi";
 import { colorFor } from "../shared/identity";
 import {
   nowId,
@@ -92,6 +92,7 @@ export async function handleApi(req: Request, url: URL, ctx: ApiContext): Promis
         await body(req)
       );
     if (path === "/api/kimi/job" && method === "GET") return await handleKimiJob(url);
+    if (path === "/api/kimi/jobs" && method === "GET") return handleKimiJobs(url);
 
     requireAuth(req, url, ctx.config);
     const agent = agentHandle(req, url);

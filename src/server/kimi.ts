@@ -111,6 +111,9 @@ export interface KimiJob {
   id: string;
   pageId: string;
   status: "running" | "done" | "error";
+  /** the user ask that started this job — lets a panel that mounts later
+   * (navigation, another viewer) reconstruct the conversation */
+  message: string;
   /** live one-liner of what Kimi is doing right now ("editing index.html…") */
   note: string;
   /** bumped on every visible change — polls long-wait until it moves */
@@ -167,6 +170,7 @@ export function handleKimiChat(
     id: nowId("kj"),
     pageId: page.record.id,
     status: "running",
+    message: message.trim(),
     note: "reading the project…",
     seq: 0,
     actions: [],
@@ -213,13 +217,30 @@ function jobView(job: KimiJob) {
   return {
     id: job.id,
     status: job.status,
+    message: job.message,
     note: job.note,
     seq: job.seq,
+    createdAt: job.createdAt,
     ...(job.reply !== undefined ? { reply: job.reply } : {}),
     ...(job.error !== undefined ? { error: job.error } : {}),
     actions: job.actions,
     iterations: job.iterations,
   };
+}
+
+/** GET /api/kimi/jobs?page=… — the page's active + recent jobs, so a panel
+ * mounting later (navigation, reload, another viewer) can re-attach to a
+ * running job or backfill a reply that landed while nobody watched. */
+export function handleKimiJobs(url: URL): Response {
+  const pageId = url.searchParams.get("page");
+  if (!pageId) throw new ApiError(400, "pass ?page=<page id>");
+  pruneJobs();
+  const list = [...jobs.values()]
+    .filter(j => j.pageId === pageId)
+    .sort((a, b) => Number(b.status === "running") - Number(a.status === "running") || b.createdAt - a.createdAt)
+    .slice(0, 6)
+    .map(jobView);
+  return Response.json({ ok: true, jobs: list });
 }
 
 async function runJob(

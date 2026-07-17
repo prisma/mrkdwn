@@ -225,6 +225,11 @@ describe("hyperframes pages", () => {
       // unknown job ids 404 with a self-explanatory message
       const job = await fetch(`${w.base}/api/kimi/job?id=kj_nope`);
       expect(job.status).toBe(404);
+      // the per-page job list works without kimi configured (empty)
+      const jobs = await fetch(`${w.base}/api/kimi/jobs?page=${created.page.id}`);
+      expect(jobs.status).toBe(200);
+      expect(((await jobs.json()) as { jobs: unknown[] }).jobs).toEqual([]);
+      expect((await fetch(`${w.base}/api/kimi/jobs`)).status).toBe(400);
       // and status reports the feature off
       const status = (await (await fetch(`${w.base}/api/status`)).json()) as { kimi: boolean; previewOrigin: string };
       expect(status.kimi).toBe(false);
