@@ -30,9 +30,12 @@ import {
   HF_MAX_TEXT_BYTES,
   HF_MAX_ZIP_BYTES,
   cleanProjectPath,
+  fileKey,
+  getProjectFile,
   isJunkPath,
   isTextPath,
   mimeFor,
+  pathFromKey,
   pickEntrypoint,
   type HyperframesFile,
   type HyperframesProject,
@@ -128,7 +131,7 @@ export async function importZipProject(
         skipped.push(`${path} (text file over ${Math.round(HF_MAX_TEXT_BYTES / 1e6)}MB)`);
         continue;
       }
-      files[path] = { kind: "text", mimeType: mimeFor(path), content: new TextDecoder().decode(bytes) };
+      files[fileKey(path)] = { kind: "text", mimeType: mimeFor(path), content: new TextDecoder().decode(bytes) };
     } else {
       if (bytes.byteLength > HF_MAX_BLOB_BYTES) {
         skipped.push(`${path} (asset over ${Math.round(HF_MAX_BLOB_BYTES / 1e6)}MB)`);
@@ -138,12 +141,12 @@ export async function importZipProject(
         throw new ApiError(503, "this server has no object storage configured — binary assets can't be stored (text-only projects work)");
       const sha256 = sha256hex(bytes);
       await ctx.mirror.write(blobKey(sha256), bytes);
-      files[path] = { kind: "blob", sha256, mimeType: mimeFor(path), byteSize: bytes.byteLength };
+      files[fileKey(path)] = { kind: "blob", sha256, mimeType: mimeFor(path), byteSize: bytes.byteLength };
       blobsStored++;
     }
   }
 
-  const entrypoint = pickEntrypoint(Object.keys(files));
+  const entrypoint = pickEntrypoint(Object.keys(files).map(pathFromKey));
   if (!entrypoint)
     throw new ApiError(400, "no .html entrypoint found in the zip — a HyperFrames project needs a composition html (usually index.html)");
 
@@ -189,7 +192,8 @@ export async function handleHyperframesExport(page: PageEntry, ctx: HyperframesC
   const project = requireProject(page);
   const out: Record<string, Uint8Array> = {};
   const missing: string[] = [];
-  for (const [path, file] of Object.entries(project.files)) {
+  for (const [key, file] of Object.entries(project.files)) {
+    const path = pathFromKey(key);
     if (file.kind === "text") {
       out[path] = new TextEncoder().encode(file.content);
     } else {
@@ -224,8 +228,8 @@ export interface HfFileInfo {
 export function listProjectFiles(page: PageEntry): { entrypoint: string; files: HfFileInfo[] } {
   const project = requireProject(page);
   const files = Object.entries(project.files)
-    .map(([path, f]) => ({
-      path,
+    .map(([key, f]) => ({
+      path: pathFromKey(key),
       kind: f.kind,
       mimeType: f.mimeType,
       byteSize: f.kind === "text" ? new TextEncoder().encode(f.content).byteLength : f.byteSize,
@@ -238,7 +242,7 @@ export function readProjectFile(page: PageEntry, rawPath: string): { path: strin
   const project = requireProject(page);
   const path = cleanProjectPath(rawPath);
   if (!path) throw new ApiError(400, `invalid path: ${rawPath}`);
-  const file = project.files[path];
+  const file = getProjectFile(project, path);
   if (!file) throw new ApiError(404, `no file at ${path} — GET /api/hf/files lists the project`);
   return { path, file };
 }
@@ -258,16 +262,20 @@ export function writeProjectFile(
     throw new ApiError(400, `${path} is not a text file type — binary assets arrive via the zip upload`);
   if (new TextEncoder().encode(content).byteLength > HF_MAX_TEXT_BYTES)
     throw new ApiError(413, `file exceeds ${Math.round(HF_MAX_TEXT_BYTES / 1e6)}MB`);
-  const existing = project.files[path];
+  const existing = getProjectFile(project, path);
   if (existing && existing.kind === "blob")
     throw new ApiError(409, `${path} is a binary asset — delete it first to replace it with a text file`);
   const created = !existing;
+  const key = fileKey(path);
   page.handle.change(d => {
     const files = d.hyperframes!.files;
-    if (files[path]?.kind === "text") {
-      A.updateText(d, ["hyperframes", "files", path, "content"], content);
+    // legacy raw-slash key from pre-escaping docs: replace it wholesale (the
+    // path APIs below can't address it)
+    if (files[path] && path !== key) delete files[path];
+    if (files[key]?.kind === "text") {
+      A.updateText(d, ["hyperframes", "files", key, "content"], content);
     } else {
-      files[path] = { kind: "text", mimeType: mimeFor(path), content };
+      files[key] = { kind: "text", mimeType: mimeFor(path), content };
     }
   }, changeOpts);
   return { path, created };
@@ -276,11 +284,12 @@ export function writeProjectFile(
 export function deleteProjectFile(page: PageEntry, rawPath: string, changeOpts: { message?: string }): string {
   const project = requireProject(page);
   const path = cleanProjectPath(rawPath);
-  if (!path || !project.files[path]) throw new ApiError(404, `no file at ${rawPath}`);
+  if (!path || !getProjectFile(project, path)) throw new ApiError(404, `no file at ${rawPath}`);
   if (path === project.entrypoint)
     throw new ApiError(400, `${path} is the project entrypoint — write a replacement first or change the entrypoint`);
   page.handle.change(d => {
-    delete d.hyperframes!.files[path];
+    delete d.hyperframes!.files[fileKey(path)];
+    delete d.hyperframes!.files[path]; // legacy raw key, if present
   }, changeOpts);
   return path;
 }
@@ -368,7 +377,7 @@ async function serveProjectFile(req: Request, pageId: string, rest: string, ctx:
   const { project } = found;
 
   const path = rest === "" ? project.entrypoint : cleanProjectPath(rest);
-  const file = path ? project.files[path] : undefined;
+  const file = path ? getProjectFile(project, path) : undefined;
   if (!path || !file) return new Response("not found", { status: 404 });
 
   if (file.kind === "text") {

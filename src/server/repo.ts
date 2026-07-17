@@ -17,7 +17,7 @@ import type { MrkdwnDoc } from "../shared/types";
 import { newPageId, uniqueSlug } from "../shared/slug";
 import { emptyCanvas } from "../shared/canvas";
 import { starterHtml } from "../shared/html";
-import { starterHyperframes } from "../shared/hyperframes";
+import { fileKey, starterHyperframes } from "../shared/hyperframes";
 import { WELCOME_DOC } from "./welcome";
 import { createObjectMirror, mirrorKey, type ObjectMirror } from "./persist";
 import type { DocumentKind } from "./store";
@@ -137,7 +137,29 @@ export async function openDocHost(
     const entry: PageEntry = { record, handle };
     entries.set(record.id, entry);
     watchTitle(entry);
+    normalizeHyperframesKeys(entry);
     return entry;
+  };
+
+  /** Docs written before file-key escaping stored project paths with raw
+   * "/" — unaddressable by Automerge's path APIs (updateText/splice join
+   * path arrays with "/"). Move them under escaped keys once, on open. */
+  const normalizeHyperframesKeys = (entry: PageEntry) => {
+    const files = entry.handle.doc()?.hyperframes?.files;
+    if (!files || !Object.keys(files).some(k => k.includes("/"))) return;
+    entry.handle.change(d => {
+      const f = d.hyperframes!.files;
+      for (const k of Object.keys(f)) {
+        if (!k.includes("/")) continue;
+        const v = f[k]!;
+        f[fileKey(k)] =
+          v.kind === "text"
+            ? { kind: "text", mimeType: v.mimeType, content: v.content }
+            : { kind: "blob", sha256: v.sha256, mimeType: v.mimeType, byteSize: v.byteSize };
+        delete f[k];
+      }
+    });
+    console.log(`[mrkdwn] normalized hyperframes file keys on ${entry.record.id} ("${entry.record.title}")`);
   };
 
   const registerEntry = async (

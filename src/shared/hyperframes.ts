@@ -30,8 +30,33 @@ export type HyperframesFile = HyperframesTextFile | HyperframesBlobFile;
 export interface HyperframesProject {
   /** project-relative path of the composition html the player loads */
   entrypoint: string;
-  /** project-relative path → file. Automerge map: per-file edits merge. */
-  files: { [path: string]: HyperframesFile };
+  /** fileKey(path) → file. Automerge map: per-file edits merge.
+   * KEYS ARE ESCAPED — Automerge's path APIs (updateText/splice) join path
+   * arrays with "/", so a key containing "/" is unaddressable. We store "/"
+   * as "\" (banned in project paths, so the mapping is bijective); always go
+   * through fileKey()/pathFromKey()/getProjectFile()/projectPaths(). */
+  files: { [key: string]: HyperframesFile };
+}
+
+/** Project path → Automerge map key ("/" ⇢ "\"). */
+export function fileKey(path: string): string {
+  return path.replaceAll("/", "\\");
+}
+
+/** Automerge map key → project path. Tolerates legacy unescaped keys (they
+ * contain "/" and no "\"), which boot migration rewrites. */
+export function pathFromKey(key: string): string {
+  return key.replaceAll("\\", "/");
+}
+
+export function getProjectFile(project: HyperframesProject, path: string): HyperframesFile | undefined {
+  // legacy fallback: docs written before key escaping used raw slash keys
+  return project.files[fileKey(path)] ?? project.files[path];
+}
+
+/** All project paths (decoded), sorted. */
+export function projectPaths(project: HyperframesProject): string[] {
+  return Object.keys(project.files).map(pathFromKey).sort();
 }
 
 // ---------- limits ----------
@@ -140,7 +165,7 @@ export function parseCompositionDuration(html: string): number | null {
 
 /** Size the embed/player box for a project (entry html may be absent mid-edit). */
 export function hyperframesRenderSize(project: HyperframesProject | undefined): { width: number; height: number } {
-  const entry = project?.files[project.entrypoint];
+  const entry = project ? getProjectFile(project, project.entrypoint) : undefined;
   if (entry?.kind === "text") {
     const declared = parseCompositionSize(entry.content);
     if (declared) return declared;

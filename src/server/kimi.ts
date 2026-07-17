@@ -92,6 +92,10 @@ HyperFrames composition contract (violating it breaks rendering):
 Working style:
 - Read a file before editing it. Prefer edit_file (exact-match) for small changes;
   write_file only for new files or full rewrites.
+- This is a LIVE collaborative document: humans and other agents may edit files
+  while you work. If an edit fails because the text changed, that's normal —
+  re-read the file and retry against its current content. Never conclude the
+  backend is broken from an edit conflict.
 - Make the change the user asked for — don't rewrite unrelated parts.
 - When done, reply with a short plain-text summary of what you changed and why.`;
 }
@@ -153,6 +157,10 @@ export function handleKimiChat(
   if (typeof message !== "string" || !message.trim()) throw new ApiError(400, 'send { "message": "..." }');
   const history = Array.isArray(data.history) ? (data.history as { role: string; content: string }[]) : [];
   pruneJobs();
+  // one run per page: two Kimi jobs editing the same project invalidate each
+  // other's exact-match edits and read like phantom "collaborators"
+  if ([...jobs.values()].some(j => j.status === "running" && j.pageId === page.record.id))
+    throw new ApiError(409, "Kimi is already working on this page — wait for the current run to finish");
   if (runningJobs() >= MAX_CONCURRENT) throw new ApiError(429, "Kimi is busy — try again in a moment");
 
   const job: KimiJob = {
@@ -371,7 +379,11 @@ async function runTool(page: PageEntry, call: ToolCall, actions: KimiJob["action
     }
   } catch (e) {
     // tool errors go back to the model so it can self-correct
-    return `error: ${e instanceof Error ? e.message : String(e)}`;
+    const message = e instanceof Error ? e.message : String(e);
+    if (message.includes("oldText not found") || message.includes("matches") /* ambiguity */) {
+      return `error: the file changed since you read it (collaborators edit live) — call read_file again and retry your edit against the exact current text. (${message})`;
+    }
+    return `error: ${message}`;
   }
 }
 

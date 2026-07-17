@@ -28,7 +28,7 @@ import {
   writeProjectFile,
   type HyperframesContext,
 } from "./hyperframes";
-import { hyperframesRenderSize } from "../shared/hyperframes";
+import { fileKey as hfFileKey, hyperframesRenderSize } from "../shared/hyperframes";
 import { handleKimiChat, handleKimiJob } from "./kimi";
 import { colorFor } from "../shared/identity";
 import {
@@ -453,9 +453,18 @@ async function postEdits(
       const { path, file } = readProjectFile(page, filePath);
       if (file.kind !== "text") throw new ApiError(400, `${path} is a binary asset — text edits only`);
       const { splices } = planEditOps(file.content, edits as EditOp[]);
+      const key = hfFileKey(path);
       // instant, like html pages: humans watch the rendered preview
       page.handle.change(d => {
-        for (const s of splices) A.splice(d, ["hyperframes", "files", path, "content"], s.index, s.delText.length, s.ins);
+        const files = d.hyperframes!.files;
+        // pre-escaping docs stored raw "/" keys, which A.splice can't address
+        // — move the file under its escaped key first
+        const legacy = path !== key ? files[path] : undefined;
+        if (legacy?.kind === "text") {
+          files[key] = { kind: "text", mimeType: legacy.mimeType, content: legacy.content };
+          delete files[path];
+        }
+        for (const s of splices) A.splice(d, ["hyperframes", "files", key, "content"], s.index, s.delText.length, s.ins);
       }, changeOptions(agent));
       return json({ ok: true, applied: splices.length, file: path, ...docPayload(ctx, page) });
     });

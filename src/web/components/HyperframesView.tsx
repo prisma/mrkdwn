@@ -11,7 +11,7 @@ import * as A from "@automerge/automerge";
 import { useDocument } from "@automerge/automerge-repo-react-hooks";
 import type { DocHandle } from "@automerge/automerge-repo/slim";
 import type { MrkdwnDoc } from "../../shared/types";
-import { hyperframesRenderSize, parseCompositionDuration } from "../../shared/hyperframes";
+import { getProjectFile, hyperframesRenderSize, parseCompositionDuration, projectPaths } from "../../shared/hyperframes";
 import { usePreviewOrigin } from "../app/preview";
 
 /** Debounced doc-version key: bursts of agent edits settle before the player
@@ -73,11 +73,11 @@ export function HyperframesView(p: {
 
   const project = doc?.hyperframes;
   const size = hyperframesRenderSize(project);
-  const entry = project?.files[project.entrypoint];
+  const entry = project ? getProjectFile(project, project.entrypoint) : undefined;
   const duration = entry?.kind === "text" ? parseCompositionDuration(entry.content) : null;
 
-  const paths = useMemo(() => (project ? Object.keys(project.files).sort() : []), [project]);
-  const selected = selectedPath && project ? project.files[selectedPath] : undefined;
+  const paths = useMemo(() => (project ? projectPaths(project) : []), [project]);
+  const selected = selectedPath && project ? getProjectFile(project, selectedPath) : undefined;
 
   if (!doc || !project) return null;
 
@@ -107,7 +107,7 @@ export function HyperframesView(p: {
           <div className="hf-files">
             <div className="hf-files-list">
               {paths.map(path => {
-                const f = project.files[path]!;
+                const f = getProjectFile(project, path)!;
                 return (
                   <button
                     key={path}

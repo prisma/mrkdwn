@@ -305,6 +305,35 @@ describe("zip upload → preview → export", () => {
       expect((await fetch(`${w.base}/preview/${id}/live/nope.js`)).status).toBe(404);
       expect((await fetch(`${w.base}/preview/${id}/live/..%2f..%2fsecret`)).status).toBe(404);
 
+      // FILES IN SUBDIRECTORIES: Automerge's path APIs can't address keys
+      // containing "/" (they join path arrays with "/"), so writes to
+      // assets/* used to 500 — pin the escaped-key fix
+      const putNested = await w.authed(`/api/hf/file?page=${id}`, {
+        method: "PUT",
+        agent: "tester",
+        body: JSON.stringify({ path: "assets/style.css", content: "h1 { font-size: 120px; }" }),
+      });
+      expect(putNested.status).toBe(200); // existed from the zip → updated in place
+      const editNested = await w.authed(`/api/doc/edits?page=${id}`, {
+        method: "POST",
+        agent: "tester",
+        body: JSON.stringify({ file: "assets/style.css", edits: [{ oldText: "120px", newText: "132px" }] }),
+      });
+      expect(editNested.status).toBe(200);
+      const nestedNow = await (await w.authed(`/api/hf/file?page=${id}&path=assets/style.css`)).text();
+      expect(nestedNow).toContain("132px");
+      // and the preview serves the updated nested file
+      const cssServed = await (await fetch(`${w.base}/preview/${id}/live/assets/style.css`)).text();
+      expect(cssServed).toContain("132px");
+      // creating a brand-new nested text file works too
+      const putNew = await w.authed(`/api/hf/file?page=${id}`, {
+        method: "PUT",
+        agent: "tester",
+        body: JSON.stringify({ path: "compositions/outro.html", content: "<div data-composition-id=\"outro\"></div>" }),
+      });
+      expect(putNew.status).toBe(201);
+      expect((await fetch(`${w.base}/preview/${id}/live/compositions/outro.html`)).status).toBe(200);
+
       // fork shares the blob without copying
       const fork = (await (
         await fetch(`${w.base}/api/pages/fork`, {
@@ -338,6 +367,44 @@ describe("zip upload → preview → export", () => {
         body: zip.slice().buffer as ArrayBuffer,
       });
       expect(up.status).toBe(400);
+    } finally {
+      await w.stop();
+    }
+  }, 20000);
+
+  test("legacy raw-slash keys migrate on write and read through the fallback", async () => {
+    const w = await makeWorld({ mirror: fakeMirror() });
+    try {
+      const created = (await (
+        await fetch(`${w.base}/api/pages`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ title: "Legacy", kind: "hyperframes" }),
+        })
+      ).json()) as { page: { id: string } };
+      const id = created.page.id;
+      // plant a pre-escaping key (raw "/") the way old docs stored them
+      const entry = w.running.ctx.host.page(id)!;
+      entry.handle.change(d => {
+        d.hyperframes!.files["assets/legacy.css"] = { kind: "text", mimeType: "text/css", content: "a { color: red; }" };
+      });
+
+      // reads fall back to the legacy key
+      const read = await w.authed(`/api/hf/file?page=${id}&path=assets/legacy.css`);
+      expect(read.status).toBe(200);
+      expect(await read.text()).toContain("color: red");
+
+      // a write migrates it to the escaped key and succeeds
+      const put = await w.authed(`/api/hf/file?page=${id}`, {
+        method: "PUT",
+        agent: "tester",
+        body: JSON.stringify({ path: "assets/legacy.css", content: "a { color: blue; }" }),
+      });
+      expect(put.status).toBe(200);
+      const files = entry.handle.doc().hyperframes!.files;
+      expect(files["assets/legacy.css"]).toBeUndefined();
+      expect(files["assets\\legacy.css"]).toBeDefined();
+      expect(await (await w.authed(`/api/hf/file?page=${id}&path=assets/legacy.css`)).text()).toContain("color: blue");
     } finally {
       await w.stop();
     }
