@@ -10,7 +10,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as A from "@automerge/automerge";
 import { useDocument } from "@automerge/automerge-repo-react-hooks";
 import type { DocHandle } from "@automerge/automerge-repo/slim";
-import type { MrkdwnDoc } from "../../shared/types";
+import type { KimiChatTurn, MrkdwnDoc } from "../../shared/types";
+import { loadIdentity } from "../app/identity";
 import { getProjectFile, hyperframesRenderSize, parseCompositionDuration, projectPaths } from "../../shared/hyperframes";
 import { usePreviewOrigin } from "../app/preview";
 
@@ -135,20 +136,13 @@ export function HyperframesView(p: {
             )}
           </div>
         )}
-        {p.kimi && <KimiPanel pageId={p.pageId} disabled={p.readOnly ?? false} />}
+        {p.kimi && <KimiPanel pageId={p.pageId} handle={p.handle} disabled={p.readOnly ?? false} />}
       </div>
     </div>
   );
 }
 
 // ---------- Kimi chat ----------
-
-interface KimiTurn {
-  role: "user" | "assistant";
-  content: string;
-  actions?: { tool: string; path?: string }[];
-  error?: boolean;
-}
 
 interface KimiJobPayload {
   id: string;
@@ -158,7 +152,7 @@ interface KimiJobPayload {
   seq?: number;
   reply?: string;
   error?: string;
-  actions?: KimiTurn["actions"];
+  actions?: KimiChatTurn["actions"];
 }
 
 /** Parse a response that SHOULD be JSON but may be an HTML error page from
@@ -172,41 +166,24 @@ async function parseJson<T>(res: Response): Promise<T | null> {
   }
 }
 
-/** The panel's transcript survives navigation: turns + the in-flight job id
- * are kept per page in localStorage; on mount we reconcile against the
- * server's job list (resume a running job — even one another viewer
- * started — or backfill a reply that finished while nobody watched). */
-interface StoredPanel {
-  turns: KimiTurn[];
-  activeJobId?: string;
-}
-
-const panelKey = (pageId: string) => `mrkdwn:kimi:${pageId}`;
-
-function loadPanel(pageId: string): StoredPanel {
-  try {
-    const raw = localStorage.getItem(panelKey(pageId));
-    const data = raw ? (JSON.parse(raw) as StoredPanel) : null;
-    return data && Array.isArray(data.turns) ? data : { turns: [] };
-  } catch {
-    return { turns: [] };
-  }
-}
-
-function savePanel(pageId: string, state: StoredPanel): void {
-  try {
-    localStorage.setItem(panelKey(pageId), JSON.stringify({ ...state, turns: state.turns.slice(-40) }));
-  } catch {}
-}
-
-function KimiPanel(p: { pageId: string; disabled: boolean }) {
-  const [turns, setTurns] = useState<KimiTurn[]>(() => loadPanel(p.pageId).turns);
-  const [activeJobId, setActiveJobId] = useState<string | null>(() => loadPanel(p.pageId).activeJobId ?? null);
+/** The transcript lives in the page's Automerge doc (doc.kimiChat, written
+ * server-side) — synced live to every viewer, persisted with the page,
+ * carried by forks. The panel derives turns from the doc and only manages
+ * the ephemeral run state (busy/note/chips) by polling the active job. */
+function KimiPanel(p: { pageId: string; handle: DocHandle<MrkdwnDoc>; disabled: boolean }) {
+  const [doc] = useDocument<MrkdwnDoc>(p.handle.url, { suspense: false });
+  const turns = useMemo(
+    () => Object.values(doc?.kimiChat ?? {}).sort((a, b) => a.createdAt - b.createdAt),
+    [doc]
+  );
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
-  const [busyActions, setBusyActions] = useState<KimiTurn["actions"]>([]);
+  const [busyActions, setBusyActions] = useState<KimiChatTurn["actions"]>([]);
   const [busyNote, setBusyNote] = useState("");
   const [elapsed, setElapsed] = useState(0);
+  /** client-side-only failures (network loss, server restart) — not part of
+   * the shared transcript */
+  const [localNote, setLocalNote] = useState<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const alive = useRef(true);
   const attachedJob = useRef<string | null>(null);
@@ -218,12 +195,8 @@ function KimiPanel(p: { pageId: string; disabled: boolean }) {
   }, []);
 
   useEffect(() => {
-    savePanel(p.pageId, { turns, ...(activeJobId ? { activeJobId } : {}) });
-  }, [p.pageId, turns, activeJobId]);
-
-  useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
-  }, [turns, busy, busyActions, busyNote]);
+  }, [turns, busy, busyActions, busyNote, localNote]);
 
   // a ticking clock makes a long run feel alive (and honest)
   useEffect(() => {
@@ -234,30 +207,22 @@ function KimiPanel(p: { pageId: string; disabled: boolean }) {
     return () => clearInterval(t);
   }, [busy]);
 
-  const finish = (turn: KimiTurn) => {
+  const settle = (note?: string) => {
     if (!alive.current) return;
-    setTurns(t => [...t, turn]);
-    setActiveJobId(null);
     setBusyActions([]);
     setBusyNote("");
     setBusy(false);
+    setLocalNote(note ?? null);
   };
 
-  const finishFromJob = (job: KimiJobPayload) => {
-    if (job.status === "error") {
-      finish({ role: "assistant", content: job.error ?? "Kimi run failed", error: true, actions: job.actions });
-    } else {
-      finish({ role: "assistant", content: job.reply || "(done)", actions: job.actions });
-    }
-  };
-
-  /** Poll a job to completion. Transient poll failures (redeploys, blips)
-   * retry a few times before giving up. */
+  /** Poll a job until it settles. The completed turn arrives through doc
+   * sync (the server writes it), so settling only clears the run UI.
+   * Transient poll failures (redeploys, blips) retry before giving up. */
   const attachToJob = async (jobId: string) => {
     if (attachedJob.current === jobId) return; // mount-reconcile + send raced
     attachedJob.current = jobId;
-    setActiveJobId(jobId);
     setBusy(true);
+    setLocalNote(null);
     let failures = 0;
     let seenSeq = -1;
     while (alive.current) {
@@ -271,11 +236,7 @@ function KimiPanel(p: { pageId: string; disabled: boolean }) {
         });
         const data = await parseJson<{ job?: KimiJobPayload; error?: string }>(res);
         if (res.status === 404) {
-          finish({
-            role: "assistant",
-            content: data?.error ?? "Kimi's session was interrupted — any edits it made are already in the project.",
-            error: true,
-          });
+          settle("Kimi's run was interrupted — any edits it made are already in the project.");
           return;
         }
         if (res.ok && data?.job) {
@@ -288,11 +249,7 @@ function KimiPanel(p: { pageId: string; disabled: boolean }) {
       if (!job) {
         failures++;
         if (failures >= 4) {
-          finish({
-            role: "assistant",
-            content: "Lost contact with the server while Kimi was working — its edits still land in the project; check the preview.",
-            error: true,
-          });
+          settle("Lost contact with the server while Kimi was working — its reply will appear when you're back online.");
           return;
         }
         await new Promise(r => setTimeout(r, 2000));
@@ -302,47 +259,22 @@ function KimiPanel(p: { pageId: string; disabled: boolean }) {
       setBusyActions(job.actions ?? []);
       if (job.note) setBusyNote(job.note);
       if (job.status !== "running") {
-        finishFromJob(job);
+        settle();
         return;
       }
     }
   };
 
-  // mount reconcile: a job may be running (started before we navigated here,
-  // or by another viewer), or the one we were watching finished while away
+  // mount reconcile: a job may be running — started before we navigated
+  // here, or by another viewer. Its turns are already in the doc.
   useEffect(() => {
     let cancelled = false;
-    const storedJobId = loadPanel(p.pageId).activeJobId;
     void (async () => {
       const res = await fetch(`/api/kimi/jobs?page=${p.pageId}`).catch(() => null);
       const data = res && res.ok ? await parseJson<{ jobs?: KimiJobPayload[] }>(res) : null;
       if (cancelled || !alive.current) return;
-      const jobs = data?.jobs ?? [];
-      const running = jobs.find(j => j.status === "running");
-      if (running) {
-        // show the ask that started it, unless our transcript already ends with it
-        if (running.message) {
-          setTurns(t =>
-            t.length > 0 && t[t.length - 1]!.role === "user" && t[t.length - 1]!.content === running.message
-              ? t
-              : [...t, { role: "user", content: running.message! }]
-          );
-        }
-        void attachToJob(running.id);
-        return;
-      }
-      if (storedJobId) {
-        const finished = jobs.find(j => j.id === storedJobId && j.status !== "running");
-        if (finished) {
-          finishFromJob(finished);
-        } else {
-          // evicted (server restart / TTL) — the edits are already in the doc
-          finish({
-            role: "assistant",
-            content: "Kimi finished while you were away — its edits are already in the project.",
-          });
-        }
-      }
+      const running = (data?.jobs ?? []).find(j => j.status === "running");
+      if (running) void attachToJob(running.id);
     })();
     return () => {
       cancelled = true;
@@ -352,34 +284,32 @@ function KimiPanel(p: { pageId: string; disabled: boolean }) {
   }, [p.pageId]);
 
   /** The tool loop outlives the platform's ~60s request window, so chat only
-   * starts a job; attachToJob polls it with short long-poll requests. */
+   * starts a job; attachToJob polls it with short long-poll requests. The
+   * user turn shows up via doc sync the moment the server records it. */
   const send = async () => {
     const message = input.trim();
     if (!message || busy) return;
     setInput("");
-    const history = turns.filter(t => !t.error).map(t => ({ role: t.role, content: t.content }));
-    setTurns(t => [...t, { role: "user", content: message }]);
     setBusy(true);
     setBusyActions([]);
+    setLocalNote(null);
     try {
       const started = await fetch(`/api/kimi/chat?page=${p.pageId}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message, history }),
+        body: JSON.stringify({ message, author: loadIdentity().name }),
       });
       const startData = await parseJson<{ job?: KimiJobPayload; error?: string }>(started);
       const jobId = startData?.job?.id;
       if (!started.ok || !jobId) {
-        finish({
-          role: "assistant",
-          content: startData?.error ?? `Kimi request failed (${started.status})`,
-          error: true,
-        });
+        settle(startData?.error ?? `Kimi request failed (${started.status})`);
+        setInput(message); // let them retry without retyping
         return;
       }
       await attachToJob(jobId);
     } catch (e) {
-      finish({ role: "assistant", content: `Kimi request failed: ${String(e)}`, error: true });
+      settle(`Kimi request failed: ${String(e)}`);
+      setInput(message);
     }
   };
 
@@ -396,8 +326,9 @@ function KimiPanel(p: { pageId: string; disabled: boolean }) {
             seconds” — Kimi edits the project files and the preview updates live.
           </div>
         )}
-        {turns.map((t, i) => (
-          <div key={i} className={`hf-kimi-turn hf-kimi-turn--${t.role}${t.error ? " hf-kimi-turn--error" : ""}`}>
+        {turns.map(t => (
+          <div key={t.id} className={`hf-kimi-turn hf-kimi-turn--${t.role}${t.error ? " hf-kimi-turn--error" : ""}`}>
+            {t.role === "user" && t.author && <div className="hf-kimi-author">{t.author}</div>}
             <div className="hf-kimi-bubble">{t.content}</div>
             {t.actions && t.actions.length > 0 && (
               <div className="hf-kimi-actions">
@@ -410,6 +341,7 @@ function KimiPanel(p: { pageId: string; disabled: boolean }) {
             )}
           </div>
         ))}
+        {localNote && !busy && <div className="hf-kimi-localnote">{localNote}</div>}
         {busy && (
           <div className="hf-kimi-turn hf-kimi-turn--assistant">
             <div className="hf-kimi-bubble hf-kimi-busy">

@@ -49,6 +49,24 @@ export interface MrkdwnDoc {
    * as independently-mergeable strings, binaries as content-addressed blob
    * references (see shared/hyperframes.ts) */
   hyperframes?: HyperframesProject;
+  /** the page's Kimi conversation, id-keyed like comments — lives in the doc
+   * so it syncs to every viewer, persists with the page, and forks with it */
+  kimiChat?: { [id: string]: KimiChatTurn };
+}
+
+export interface KimiChatTurn {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: number;
+  /** display name of the human who asked (user turns) */
+  author?: string;
+  /** true when the run ended in an error (assistant turns) */
+  error?: boolean;
+  /** file-touching actions from the run (assistant turns) */
+  actions?: { tool: string; path?: string }[];
+  /** the Kimi job this turn belongs to */
+  jobId?: string;
 }
 
 /** Ephemeral presence message, broadcast over the Automerge sync channel. */

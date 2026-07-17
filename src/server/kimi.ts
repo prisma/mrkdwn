@@ -17,7 +17,7 @@ import { planEdits, type EditOp } from "./edits";
 import { enqueue } from "./typewriter";
 import { listProjectFiles, readProjectFile, writeProjectFile } from "./hyperframes";
 import { colorFor } from "../shared/identity";
-import { nowId, type PresenceMessage } from "../shared/types";
+import { nowId, type KimiChatTurn, type PresenceMessage } from "../shared/types";
 
 const KIMI_HANDLE = "kimi";
 const KIMI_NAME = "Kimi K3";
@@ -133,6 +133,25 @@ function bump(job: KimiJob, note?: string): void {
   job.updatedAt = Date.now();
 }
 
+/** Chat turns live in the page doc (like comments): synced to every viewer,
+ * persisted with the page, carried along by forks. */
+function appendChatTurn(page: PageEntry, turn: Omit<KimiChatTurn, "id" | "createdAt">): void {
+  const full: KimiChatTurn = { id: nowId("kt"), createdAt: Date.now(), ...turn };
+  page.handle.change(d => {
+    if (!d.kimiChat) d.kimiChat = {};
+    d.kimiChat[full.id] = full;
+  });
+}
+
+/** Conversation context for the model, from the doc (not the client). */
+function chatHistory(page: PageEntry, excludeJobId: string): { role: "user" | "assistant"; content: string }[] {
+  const turns = Object.values(page.handle.doc().kimiChat ?? {})
+    .filter(t => !t.error && t.jobId !== excludeJobId)
+    .sort((a, b) => a.createdAt - b.createdAt)
+    .slice(-12);
+  return turns.map(t => ({ role: t.role, content: t.content }));
+}
+
 const jobs = new Map<string, KimiJob>();
 const JOB_TTL_MS = 15 * 60_000;
 const JOB_POLL_MAX_WAIT_S = 25; // long-poll cap — stay far under the edge timeout
@@ -158,7 +177,7 @@ export function handleKimiChat(
     throw new ApiError(400, "Kimi is currently available on hyperframes pages only");
   const message = data.message;
   if (typeof message !== "string" || !message.trim()) throw new ApiError(400, 'send { "message": "..." }');
-  const history = Array.isArray(data.history) ? (data.history as { role: string; content: string }[]) : [];
+  const author = typeof data.author === "string" ? data.author.trim().slice(0, 40) : undefined;
   pruneJobs();
   // one run per page: two Kimi jobs editing the same project invalidate each
   // other's exact-match edits and read like phantom "collaborators"
@@ -179,8 +198,10 @@ export function handleKimiChat(
     updatedAt: Date.now(),
   };
   jobs.set(job.id, job);
+  // the ask goes into the doc before the run starts — every viewer sees it
+  appendChatTurn(page, { role: "user", content: job.message, ...(author ? { author } : {}), jobId: job.id });
   // fire and forget — runJob never throws
-  void runJob(deps, kimi, page, job, message.trim(), history);
+  void runJob(deps, kimi, page, job);
   return Response.json({ ok: true, job: jobView(job) }, { status: 202 });
 }
 
@@ -247,9 +268,7 @@ async function runJob(
   deps: { notifications: NotificationCenter },
   kimi: KimiConfig,
   page: PageEntry,
-  job: KimiJob,
-  message: string,
-  history: { role: string; content: string }[]
+  job: KimiJob
 ): Promise<void> {
   try {
     deps.notifications.markSeen(KIMI_HANDLE, KIMI_NAME);
@@ -257,11 +276,8 @@ async function runJob(
 
     const messages: ChatMessage[] = [
       { role: "system", content: systemPrompt(page) },
-      ...history
-        .filter(m => (m.role === "user" || m.role === "assistant") && typeof m.content === "string")
-        .slice(-12)
-        .map(m => ({ role: m.role as "user" | "assistant", content: m.content })),
-      { role: "user", content: message },
+      ...chatHistory(page, job.id),
+      { role: "user", content: job.message },
     ];
 
     for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
@@ -273,6 +289,7 @@ async function runJob(
       if (calls.length === 0) {
         job.reply = reply.content?.trim() || "(done)";
         job.status = "done";
+        appendChatTurn(page, { role: "assistant", content: job.reply, actions: job.actions.slice(), jobId: job.id });
         bump(job, "done");
         return;
       }
@@ -290,6 +307,14 @@ async function runJob(
     job.status = "error";
     if (!(e instanceof ApiError)) console.error("[mrkdwn] kimi job failed:", e);
   } finally {
+    if (job.status === "error")
+      appendChatTurn(page, {
+        role: "assistant",
+        content: job.error ?? "Kimi run failed",
+        error: true,
+        actions: job.actions.slice(),
+        jobId: job.id,
+      });
     bump(job);
     broadcastKimiPresence(page, false);
   }

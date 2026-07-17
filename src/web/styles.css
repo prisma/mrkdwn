@@ -3050,3 +3050,17 @@ body.blk-grabbing * {
   0%, 100% { opacity: 0.25; transform: scale(0.8); }
   40% { opacity: 1; transform: scale(1.15); }
 }
+
+/* Kimi shared-transcript touches: author labels + ephemeral local notes */
+.hf-kimi-author {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  padding: 0 4px;
+}
+.hf-kimi-localnote {
+  align-self: center;
+  font-size: 12px;
+  color: var(--text-faint);
+  font-style: italic;
+  padding: 2px 8px;
+}
