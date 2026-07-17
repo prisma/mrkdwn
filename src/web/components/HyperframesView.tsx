@@ -153,6 +153,8 @@ interface KimiTurn {
 interface KimiJobPayload {
   id: string;
   status: "running" | "done" | "error";
+  note?: string;
+  seq?: number;
   reply?: string;
   error?: string;
   actions?: KimiTurn["actions"];
@@ -174,15 +176,35 @@ function KimiPanel(p: { pageId: string; disabled: boolean }) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [busyActions, setBusyActions] = useState<KimiTurn["actions"]>([]);
+  const [busyNote, setBusyNote] = useState("");
+  const [elapsed, setElapsed] = useState(0);
   const logRef = useRef<HTMLDivElement>(null);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
-  }, [turns, busy, busyActions]);
+  }, [turns, busy, busyActions, busyNote]);
+
+  // a ticking clock makes a long run feel alive (and honest)
+  useEffect(() => {
+    if (!busy) return;
+    const started = Date.now();
+    setElapsed(0);
+    const t = setInterval(() => setElapsed(Math.round((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(t);
+  }, [busy]);
 
   const finish = (turn: KimiTurn) => {
+    if (!alive.current) return;
     setTurns(t => [...t, turn]);
     setBusyActions([]);
+    setBusyNote("");
     setBusy(false);
   };
 
@@ -215,11 +237,16 @@ function KimiPanel(p: { pageId: string; disabled: boolean }) {
       }
 
       let failures = 0;
-      let seenActions = 0;
-      for (;;) {
+      let seenSeq = -1;
+      while (alive.current) {
         let job: KimiJobPayload | undefined;
         try {
-          const res = await fetch(`/api/kimi/job?id=${jobId}&wait=20&actions=${seenActions}`);
+          // the timeout matters: a silently-dropped long-poll connection
+          // would otherwise hang this await forever, freezing the panel on
+          // "working…" while the job finishes without us
+          const res = await fetch(`/api/kimi/job?id=${jobId}&wait=20&seq=${seenSeq}`, {
+            signal: AbortSignal.timeout(30_000),
+          });
           const data = await parseJson<{ job?: KimiJobPayload; error?: string }>(res);
           if (res.status === 404) {
             finish({
@@ -234,7 +261,7 @@ function KimiPanel(p: { pageId: string; disabled: boolean }) {
             failures = 0;
           }
         } catch {
-          // network blip — fall through to the retry counter
+          // network blip / timed-out poll — fall through to the retry counter
         }
         if (!job) {
           failures++;
@@ -249,8 +276,9 @@ function KimiPanel(p: { pageId: string; disabled: boolean }) {
           await new Promise(r => setTimeout(r, 2000));
           continue;
         }
-        seenActions = job.actions?.length ?? 0;
+        seenSeq = job.seq ?? -1;
         setBusyActions(job.actions ?? []);
+        if (job.note) setBusyNote(job.note);
         if (job.status === "done") {
           finish({ role: "assistant", content: job.reply || "(done)", actions: job.actions });
           return;
@@ -294,7 +322,13 @@ function KimiPanel(p: { pageId: string; disabled: boolean }) {
         ))}
         {busy && (
           <div className="hf-kimi-turn hf-kimi-turn--assistant">
-            <div className="hf-kimi-bubble hf-kimi-busy">Kimi is working…</div>
+            <div className="hf-kimi-bubble hf-kimi-busy">
+              <span className="hf-kimi-pulse" aria-hidden>
+                <i /><i /><i />
+              </span>
+              {busyNote || "Kimi is working…"}
+              {elapsed >= 5 && <span className="hf-kimi-elapsed"> · {elapsed >= 60 ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s` : `${elapsed}s`}</span>}
+            </div>
             {busyActions && busyActions.length > 0 && (
               <div className="hf-kimi-actions">
                 {busyActions.map((a, j) => (

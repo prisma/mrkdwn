@@ -107,12 +107,23 @@ export interface KimiJob {
   id: string;
   pageId: string;
   status: "running" | "done" | "error";
+  /** live one-liner of what Kimi is doing right now ("editing index.html…") */
+  note: string;
+  /** bumped on every visible change — polls long-wait until it moves */
+  seq: number;
   reply?: string;
   error?: string;
   actions: { tool: string; path?: string }[];
   iterations: number;
   createdAt: number;
   updatedAt: number;
+}
+
+/** Record visible progress: bump the poll sequence so waiting polls return. */
+function bump(job: KimiJob, note?: string): void {
+  if (note !== undefined) job.note = note;
+  job.seq++;
+  job.updatedAt = Date.now();
 }
 
 const jobs = new Map<string, KimiJob>();
@@ -148,6 +159,8 @@ export function handleKimiChat(
     id: nowId("kj"),
     pageId: page.record.id,
     status: "running",
+    note: "reading the project…",
+    seq: 0,
     actions: [],
     iterations: 0,
     createdAt: Date.now(),
@@ -159,9 +172,9 @@ export function handleKimiChat(
   return Response.json({ ok: true, job: jobView(job) }, { status: 202 });
 }
 
-/** GET /api/kimi/job?id=…&wait=… — poll a job; `wait` long-polls (seconds,
- * capped) until the job leaves "running" so the panel gets updates fast
- * without hammering. */
+/** GET /api/kimi/job?id=…&wait=…&seq=… — poll a job; `wait` long-polls
+ * (seconds, capped) until the job's `seq` moves past the caller's, so every
+ * visible change (note, action, completion) returns immediately. */
 export async function handleKimiJob(url: URL): Promise<Response> {
   const id = url.searchParams.get("id");
   if (!id) throw new ApiError(400, "pass ?id=<job id> from the chat response");
@@ -173,9 +186,16 @@ export async function handleKimiJob(url: URL): Promise<Response> {
     );
   const waitS = Math.min(Math.max(0, Number(url.searchParams.get("wait") ?? 0) || 0), JOB_POLL_MAX_WAIT_S);
   const deadline = Date.now() + waitS * 1000;
+  // seq is the progress fingerprint; `actions` is the pre-seq client's version
+  const seqSeen = url.searchParams.has("seq")
+    ? Number(url.searchParams.get("seq"))
+    : url.searchParams.has("actions")
+      ? NaN // legacy param can't track notes — behave like "return on any action change"
+      : -1;
   const actionsSeen = Number(url.searchParams.get("actions") ?? -1);
-  // return early on progress too, not just completion — live action chips
-  while (job.status === "running" && job.actions.length === actionsSeen && Date.now() < deadline) {
+  const unchanged = () =>
+    Number.isNaN(seqSeen) ? job.actions.length === actionsSeen : job.seq === seqSeen;
+  while (job.status === "running" && unchanged() && Date.now() < deadline) {
     await new Promise(r => setTimeout(r, 300));
   }
   return Response.json({ ok: true, job: jobView(job) });
@@ -185,6 +205,8 @@ function jobView(job: KimiJob) {
   return {
     id: job.id,
     status: job.status,
+    note: job.note,
+    seq: job.seq,
     ...(job.reply !== undefined ? { reply: job.reply } : {}),
     ...(job.error !== undefined ? { error: job.error } : {}),
     actions: job.actions,
@@ -215,19 +237,20 @@ async function runJob(
 
     for (let iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
       job.iterations = iteration;
-      job.updatedAt = Date.now();
-      const reply = await callKimi(kimi, messages);
+      bump(job, iteration === 1 ? "reading the project…" : "thinking about the next step…");
+      const reply = await callKimi(kimi, messages, note => bump(job, note));
       messages.push(reply);
       const calls = reply.tool_calls ?? [];
       if (calls.length === 0) {
         job.reply = reply.content?.trim() || "(done)";
         job.status = "done";
-        job.updatedAt = Date.now();
+        bump(job, "done");
         return;
       }
       for (const call of calls) {
+        bump(job, toolNote(call));
         const output = await runTool(page, call, job.actions);
-        job.updatedAt = Date.now();
+        bump(job);
         messages.push({ role: "tool", content: output, tool_call_id: call.id });
       }
     }
@@ -238,12 +261,35 @@ async function runJob(
     job.status = "error";
     if (!(e instanceof ApiError)) console.error("[mrkdwn] kimi job failed:", e);
   } finally {
-    job.updatedAt = Date.now();
+    bump(job);
     broadcastKimiPresence(page, false);
   }
 }
 
-async function callKimi(kimi: KimiConfig, messages: ChatMessage[]): Promise<ChatMessage> {
+function toolNote(call: ToolCall): string {
+  let path = "";
+  try {
+    path = String((JSON.parse(call.function.arguments || "{}") as { path?: unknown }).path ?? "");
+  } catch {}
+  switch (call.function.name) {
+    case "list_files":
+      return "surveying the project files…";
+    case "read_file":
+      return path ? `reading ${path}…` : "reading a file…";
+    case "edit_file":
+      return path ? `editing ${path}…` : "editing…";
+    case "write_file":
+      return path ? `writing ${path}…` : "writing a file…";
+    default:
+      return "working…";
+  }
+}
+
+async function callKimi(
+  kimi: KimiConfig,
+  messages: ChatMessage[],
+  onNote?: (note: string) => void
+): Promise<ChatMessage> {
   // upstream providers rate-limit in bursts — ride them out instead of
   // bouncing an error into the chat panel
   const backoffMs = [2_000, 5_000, 12_000];
@@ -272,6 +318,11 @@ async function callKimi(kimi: KimiConfig, messages: ChatMessage[]): Promise<Chat
       throw new ApiError(502, `Kimi API error ${res.status}: ${detail}`);
     }
     await res.body?.cancel();
+    onNote?.(
+      res.status === 429
+        ? `the model is rate-limited upstream — retrying in ${Math.round(wait / 1000)}s…`
+        : `the model API hiccuped (${res.status}) — retrying…`
+    );
     await new Promise(r => setTimeout(r, wait));
   }
 }
