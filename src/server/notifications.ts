@@ -195,7 +195,17 @@ export class NotificationCenter {
     if (!doc) return;
     const known = new Set(this.knownHandles());
     const pageInfo = () => ({ id: page.id, title: page.title() });
-    const found: { key: string; make: () => AgentNotification }[] = [];
+    // one key → one or more notifications (activity fans out to many agents)
+    const found: { key: string; make: () => AgentNotification[] }[] = [];
+
+    // agents that hear about untargeted comment activity: currently-online
+    // ones. Kimi is request-driven — it never polls or acks a queue, so
+    // fanned-out items would only pile up as an ever-growing unread badge.
+    const online = new Set(
+      this.statuses()
+        .filter(a => a.online && a.handle !== "kimi")
+        .map(a => a.handle)
+    );
 
     const content = doc.content ?? "";
     for (const m of scanMentions(content)) {
@@ -208,14 +218,14 @@ export class NotificationCenter {
       }
       found.push({
         key: `${page.id}:doc:${cursor}:${m.handle}`,
-        make: () => ({
+        make: () => [{
           id: nowId("n"),
           agent: m.handle,
-          kind: "doc-mention",
+          kind: "doc-mention" as const,
           createdAt: Date.now(),
           snippet: mentionSnippet(content, m.index),
           page: pageInfo(),
-        }),
+        }],
       });
     }
 
@@ -228,47 +238,115 @@ export class NotificationCenter {
         if (!known.has(m.handle)) continue;
         found.push({
           key: `${page.id}:canvas:${node.id}:${m.handle}`,
-          make: () => ({
+          make: () => [{
             id: nowId("n"),
             agent: m.handle,
-            kind: "doc-mention",
+            kind: "doc-mention" as const,
             createdAt: Date.now(),
             snippet: mentionSnippet(node.text, m.index),
             page: pageInfo(),
-          }),
+          }],
         });
       }
     }
 
+    const agentOf = (author?: { id?: string; kind?: string }): string | null =>
+      author?.kind === "agent" ? normalizeHandle((author.id ?? "").replace(/^agent:/, "")) : null;
+    const short = (s: string) => (s.length > 160 ? `${s.slice(0, 157)}…` : s);
+
     for (const comment of Object.values(doc.comments ?? {})) {
-      const bodies = [
-        { key: `comment:${comment.id}`, body: comment.body, from: comment.author?.name },
-        ...comment.replies.map(r => ({ key: `reply:${r.id}`, body: r.body, from: r.author?.name })),
+      // thread participants accumulate top-down: a reply notifies the agents
+      // who spoke BEFORE it (no @mention needed — it's a direct response)
+      const participants = new Set<string>();
+      const rootAgent = agentOf(comment.author);
+      if (rootAgent) participants.add(rootAgent);
+      const items = [
+        { key: `comment:${comment.id}`, body: comment.body, from: comment.author?.name, author: rootAgent, thread: new Set<string>() },
+        ...comment.replies.map(r => {
+          const item = {
+            key: `reply:${r.id}`,
+            body: r.body,
+            from: r.author?.name,
+            author: agentOf(r.author),
+            thread: new Set(participants),
+          };
+          const a = agentOf(r.author);
+          if (a) participants.add(a);
+          return item;
+        }),
       ];
-      for (const b of bodies) {
+
+      for (const b of items) {
+        const mentioned = new Set<string>();
         for (const m of scanMentions(b.body)) {
           if (!known.has(m.handle)) continue;
+          mentioned.add(m.handle);
           found.push({
             key: `${page.id}:${b.key}:${m.handle}`,
-            make: () => ({
+            make: () => [{
               id: nowId("n"),
               agent: m.handle,
-              kind: "comment-mention",
+              kind: "comment-mention" as const,
               createdAt: Date.now(),
               snippet: mentionSnippet(b.body, m.index),
               commentId: comment.id,
               from: b.from,
               page: pageInfo(),
-            }),
+            }],
           });
         }
+
+        // replying to an agent's thread reaches it without a tag (queued even
+        // if it's offline right now — this is directed, like a mention)
+        const threadNotified = new Set<string>();
+        for (const h of b.thread) {
+          if (h === b.author || h === "kimi" || mentioned.has(h)) continue;
+          threadNotified.add(h);
+          found.push({
+            key: `${page.id}:${b.key}:thread:${h}`,
+            make: () => [{
+              id: nowId("n"),
+              agent: h,
+              kind: "comment-reply" as const,
+              createdAt: Date.now(),
+              snippet: short(b.body),
+              commentId: comment.id,
+              from: b.from,
+              page: pageInfo(),
+              instruction:
+                "This is a reply in a comment thread you're part of — read it and respond in that thread (POST /api/comments/<commentId>/replies).",
+            }],
+          });
+        }
+
+        // everything else fans out to connected agents to triage themselves.
+        // One key per item: whoever is online when it's first seen hears about
+        // it; agents joining later are told to read the page's comments anyway.
+        found.push({
+          key: `${page.id}:${b.key}:activity`,
+          make: () =>
+            [...online]
+              .filter(h => h !== b.author && !mentioned.has(h) && !threadNotified.has(h))
+              .map(h => ({
+                id: nowId("n"),
+                agent: h,
+                kind: "comment-activity" as const,
+                createdAt: Date.now(),
+                snippet: short(b.body),
+                commentId: comment.id,
+                from: b.from,
+                page: pageInfo(),
+                instruction:
+                  "Not addressed to you directly. Decide whether this comment is relevant to your work on this page — if it is, act on it (reply in-thread or edit); if not, just ack it.",
+              })),
+        });
       }
     }
 
     for (const f of found) {
       if (this.seenKeys.has(f.key)) continue;
       this.seenKeys.add(f.key);
-      if (!silently) this.enqueue(f.make());
+      if (!silently) for (const n of f.make()) this.enqueue(n);
     }
     this.scheduleSave();
   }

@@ -312,14 +312,23 @@ mk -X POST $MRKDWN_URL/api/comments/<id>/resolve
 Omit \`anchorText\` for a document-level comment. If \`anchorText\` is ambiguous, pass
 \`"occurrence": 2\` (1-based).
 
-## Mentions → your task queue
+## Notifications → your task queue
 
-When anyone writes \`@$MRKDWN_AGENT\` in the doc or in a comment, you get a notification:
+You get notified for more than explicit tags:
+
+- \`doc-mention\` / \`comment-mention\` — someone wrote \`@$MRKDWN_AGENT\`.
+- \`comment-reply\` — someone replied in a comment thread you're part of.
+  **No tag needed**: replying to you is addressing you. Respond in that
+  thread.
+- \`comment-activity\` — any new comment on a page, delivered to agents that
+  are currently online. It isn't addressed to you; each one carries an
+  \`instruction\` asking you to judge relevance yourself — act if it concerns
+  your work, otherwise just ack it.
 
 \`\`\`bash
 mk "$MRKDWN_URL/api/notifications?wait=25"
-# → { "notifications": [ { "id", "kind": "doc-mention"|"comment-mention",
-#      "snippet": "…the line that mentions you…", "commentId"? } ] }
+# → { "notifications": [ { "id", "kind": "doc-mention"|"comment-mention"|"comment-reply"|"comment-activity",
+#      "snippet": "…", "commentId"?, "instruction"? } ] }
 \`\`\`
 
 \`wait\` long-polls up to that many seconds — loop it while you work so humans can reach you:

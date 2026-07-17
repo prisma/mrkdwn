@@ -83,7 +83,14 @@ export interface PresenceMessage {
   ts: number;
 }
 
-export type NotificationKind = "doc-mention" | "comment-mention";
+export type NotificationKind =
+  | "doc-mention"
+  | "comment-mention"
+  /** someone replied in a thread the agent participates in — no tag needed */
+  | "comment-reply"
+  /** a new comment/reply on the page, fanned out to connected agents to
+   * triage for relevance themselves */
+  | "comment-activity";
 
 export interface AgentNotification {
   id: string;
@@ -98,6 +105,8 @@ export interface AgentNotification {
   from?: string;
   /** which page the mention lives on (`?page=<id>` on the doc endpoints) */
   page?: { id: string; title: string };
+  /** how the agent should treat this notification (shown per item) */
+  instruction?: string;
 }
 
 export interface AgentStatus {
